@@ -1,0 +1,117 @@
+please the controls just put them in one scripts or something not for me to see them separate on the directory think please include  other currencies and make all rules to be used exactly because this is a real system ......and advanced models and advnaced system please give me all scripts you will put for the system on models please do real models and the controls or rules there do as they are because they will be scenarios demonstration to see if the system is working so l want full system working now and the models should be real models with accuracy with feature engineering and all done in jupyter notebook format please and the html make them the best dashboard and frontend professional ones with all settings and configurations real system please  please if some controls do not require modes make them rules please and then models should be high accuracy models training different algorithms and being big models please to have high accuracy like feature engineering detecting patterns and anomaly detections too  and the data you generate should be professional please dont simplify make this the best system please this should do things in reality its not for demo the model will be used as pickle files not classes please this is what the control should do 
+Solution Control Name Control Description
+1 AML Staff posting transactions into
+their own accounts
+This control shall flag all transactions where
+staff are posting transactions onto their own
+accounts or where a suspense account is
+debited to credit a staff account
+2 AML Unusual Transaction Customer
+– incoming transactions
+This profiling control picks any customer
+that performs incoming transactions out of
+their normal historical profile
+3 AML Small profile incoming
+transactions
+This profiling control shall flag incoming
+transactions that deviate from usual customer
+profile for accounts with less than 7
+transactions in the history
+4 SWIFT Unusual outgoing MT103
+SWIFT transactions
+This control shall flag outgoing MX
+messages (ISO 20022) on SWIFT CBPR+
+transactions that deviates from the usual
+customer’s profile for customers with more
+than 7 transactions in history
+5 SWIFT Small profile outgoing MT103
+SWIFT transactions
+This control shall flag outgoing MX
+messages (ISO 20022) on SWIFT CBPR+
+transactions that deviate from the usual
+customer’s profile for customers with less
+than 7 transactions in history
+6 Cross
+Currency
+Cross currency transactions This control shall flag cross-currency
+transactions that happened on channels
+targeting RTGS, Internal transfers, Zipit
+7 AML sanction screening This control shall screen real time on
+customer transactions and on onboarding flag
+any client or customer on sanctions lists and
+with adverse media.  so this is the functional requirements of the system now FUNCTIONAL REQUIREMENTS
+✓ Real-time monitoring of all customer transactions.
+✓ Configurable threshold-based alerts (e.g., ≥ USD 10,000 or equivalent).
+✓ Detection of suspicious activities involving sanctioned persons/entities, PEPs, or highrisk patterns.
+✓ Schema-compliant reporting with complete customer and transaction details.
+✓ Integration with Core Banking System (CBS), GoAML platform, and email systems.
+✓ Risk scoring based on transaction amount, frequency, profile, and historical behavior.
+✓ Alerts delivered via system dashboard and email; routed to Compliance before branch
+involvement.
+✓ Case management capability with audit trail.
+✓ Performance metrics tracking alerts, review times, escalation times, and false positive
+make the best system with those requirements make it a professional system please with client interface and then admin side to do all.................All l want is a professional system with good enhancements please a full system big system thats what l want now.....so use Zimbabwe then other countries in all please make the system big and all using FASTAPIs and to make a system which needs to be used in real world and professional system which does real time on dashboard interacts and is beautiful very very like any other in some banks  ...frontend use html and then css and js inside the htmls for the client and admin sides with login and all beauitful things a system for admin can be to be the best  ..................Make the big system make sure all functions work and all controls there Real-time compare parties vs watchlists (UN, OFAC, EU, UK,ZIM domestic).
+
+Exact match + fuzzy matching (token-set ratio, phonetics/soundex, transliteration) with configurable similarity thresholds.
+
+Include adverse media and PEP lists where available...give me all scripts you will put for the system on models please do real models and the controls or rules there do as they are because they will be scenarios demonstration to see if the system is working so l want full system working now and the models should be real models with accuracy with feature engineering and all done in jupyter notebook format please and the html make them the best dashboard and frontend professional ones with all settings and configurations real system please  please if some controls do not require modes make them rules please and then models should be high accuracy models training different algorithms and being big models please to have high accuracy like feature engineering detecting patterns and anomaly detections too  and the data you generate should be professional please dont simplify make this the best system please this should do things in reality its not for demo the model will be used as pickle files not classes please this is what the control should do 
+Solution Control Name Control Description
+1 AML Staff posting transactions into
+their own accounts
+This control shall flag all transactions where
+staff are posting transactions onto their own
+accounts or where a suspense account is
+debited to credit a staff account
+2 AML Unusual Transaction Customer
+– incoming transactions
+This profiling control picks any customer
+that performs incoming transactions out of
+their normal historical profile
+3 AML Small profile incoming
+transactions
+This profiling control shall flag incoming
+transactions that deviate from usual customer
+profile for accounts with less than 7
+transactions in the history
+4 SWIFT Unusual outgoing MT103
+SWIFT transactions
+This control shall flag outgoing MX
+messages (ISO 20022) on SWIFT CBPR+
+transactions that deviates from the usual
+customer’s profile for customers with more
+than 7 transactions in history
+5 SWIFT Small profile outgoing MT103
+SWIFT transactions
+This control shall flag outgoing MX
+messages (ISO 20022) on SWIFT CBPR+
+transactions that deviate from the usual
+customer’s profile for customers with less
+than 7 transactions in history
+6 Cross
+Currency
+Cross currency transactions This control shall flag cross-currency
+transactions that happened on channels
+targeting RTGS, Internal transfers, Zipit
+7 AML sanction screening This control shall screen real time on
+customer transactions and on onboarding flag
+any client or customer on sanctions lists and
+with adverse media.  so this is the functional requirements of the system now FUNCTIONAL REQUIREMENTS
+✓ Real-time monitoring of all customer transactions.
+✓ Configurable threshold-based alerts (e.g., ≥ USD 10,000 or equivalent).
+✓ Detection of suspicious activities involving sanctioned persons/entities, PEPs, or highrisk patterns.
+✓ Schema-compliant reporting with complete customer and transaction details.
+✓ Integration with Core Banking System (CBS), GoAML platform, and email systems.
+✓ Risk scoring based on transaction amount, frequency, profile, and historical behavior.
+✓ Alerts delivered via system dashboard and email; routed to Compliance before branch
+involvement.
+✓ Case management capability with audit trail.
+✓ Performance metrics tracking alerts, review times, escalation times, and false positive
+make the best system with those requirements make it a professional system please with client interface and then admin side to do all.................All l want is a professional system with good enhancements please a full system big system thats what l want now.....so use Zimbabwe then other countries in all please make the system big and all using FASTAPIs and to make a system which needs to be used in real world and professional system which does real time on dashboard interacts and is beautiful very very like any other in some banks  ...frontend use html and then css and js inside the htmls for the client and admin sides with login and all beauitful things a system for admin can be to be the best  ..................Make the big system make sure all functions work and all controls there Real-time compare parties vs watchlists (UN, OFAC, EU, UK,ZIM domestic).
+
+Exact match + fuzzy matching (token-set ratio, phonetics/soundex, transliteration) with configurable similarity thresholds.
+
+Include adverse media and PEP lists where available...........Channels: RTGS, ZIPIT, Internal transfers, card/POS, mobile money.
+
+Currencies: ZWL, USD, ZAR, others; maintain FX tables and corridor thresholds.
+
+Regulatory: align GoAML schema, local sanctions lists; store exchange-rate used in decision.......................and you also know how some features can benefit you can add some for the best Transaction Monitoring System for a bank so temerninoglogy should be for a bank

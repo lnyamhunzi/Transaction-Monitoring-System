@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block title %}Real-time Monitoring{% endblock %}
+
+{% block page_title %}
+<div class="d-flex justify-content-between align-items-center">
+    <span>Real-time Monitoring</span>
+    <span class="badge bg-danger">Live</span>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Filters & Controls</h5>
+                <div class="row g-3 align-items-center">
+                    <div class="col-auto">
+                        <label for="riskLevelFilter" class="col-form-label">Risk Level:</label>
+                    </div>
+                    <div class="col-md-2">
+                        <select class="form-select" id="riskLevelFilter">
+                            <option value="all">All</option>
+                            <option value="low">Low</option>
+                            <option value="medium">Medium</option>
+                            <option value="high">High</option>
+                            <option value="critical">Critical</option>
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <label for="alertTypeFilter" class="col-form-label">Alert Type:</label>
+                    </div>
+                    <div class="col-md-2">
+                        <select class="form-select" id="alertTypeFilter">
+                            <option value="all">All</option>
+                            <option value="fraud">Fraud</option>
+                            <option value="aml">AML</option>
+                            <option value="sanction">Sanction</option>
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <label for="timeRangeFilter" class="col-form-label">Time Range:</label>
+                    </div>
+                    <div class="col-md-2">
+                        <select class="form-select" id="timeRangeFilter">
+                            <option value="1h">Last 1 Hour</option>
+                            <option value="4h">Last 4 Hours</option>
+                            <option value="24h">Last 24 Hours</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3 text-end">
+                        <button class="btn btn-outline-secondary me-2" id="pauseMonitoring"><i class="fas fa-pause"></i> Pause</button>
+                        <button class="btn btn-outline-danger me-2" id="clearStream"><i class="fas fa-trash"></i> Clear</button>
+                        <button class="btn btn-outline-primary" id="exportRealTimeData"><i class="fas fa-download"></i> Export</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-6 mb-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title">Real-time Transaction Flow</h5>
+                <canvas id="realTimeFlowChart"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6 mb-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title">Risk Distribution</h5>
+                <canvas id="realTimeRiskChart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-12 mb-3">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Live Transaction Stream</h5>
+                <div id="transactionStream" class="transaction-stream">
+                    <!-- Real-time transactions will be appended here by JS -->
+                    <p class="text-muted text-center mt-3">Waiting for real-time transactions...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-6 mb-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title">Transaction Volume Over Time</h5>
+                <canvas id="transactionVolumeChart"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6 mb-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title">Alert Trends</h5>
+                <canvas id="alertTrendsChart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Alert Notifications Container -->
+<div id="alertNotifications" class="position-fixed top-0 end-0 p-3" style="z-index: 1055;"></div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/real-time-monitoring.js"></script>
+{% endblock %}

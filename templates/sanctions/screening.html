@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% block title %}Sanctions Screening{% endblock %}
+
+{% block page_title %}Sanctions Screening{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Single Entity Screening</h5>
+                <form id="singleScreeningForm">
+                    <div class="mb-3">
+                        <label for="entityName" class="form-label">Name</label>
+                        <input type="text" class="form-control" id="entityName" placeholder="Enter name">
+                    </div>
+                    <div class="mb-3">
+                        <label for="entityCountry" class="form-label">Country</label>
+                        <input type="text" class="form-control" id="entityCountry" placeholder="Enter country">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Screen</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Bulk Screening</h5>
+                <p>Upload a CSV file with names and countries for bulk screening.</p>
+                <form id="bulkScreeningForm">
+                    <div class="mb-3">
+                        <input class="form-control" type="file" id="bulkScreeningFile">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Upload and Screen</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Screening Results</h5>
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Country</th>
+                            <th>Match Status</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultsBody">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.getElementById('singleScreeningForm').addEventListener('submit', async function(event) {
+        event.preventDefault();
+        const name = document.getElementById('entityName').value;
+        const country = document.getElementById('entityCountry').value;
+        const response = await fetch('/api/sanctions/screen/single', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ name, country }),
+        });
+        const results = await response.json();
+        displayResults([{
+            name,
+            country,
+            sanctions_matches: results.sanctions_matches,
+            pep_matches: results.pep_matches
+        }]);
+    });
+
+    document.getElementById('bulkScreeningForm').addEventListener('submit', async function(event) {
+        event.preventDefault();
+        const fileInput = document.getElementById('bulkScreeningFile');
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+
+        const response = await fetch('/api/sanctions/screen/bulk', {
+            method: 'POST',
+            body: formData,
+        });
+        const results = await response.json();
+        displayResults(results);
+    });
+
+    function displayResults(results) {
+        const resultsBody = document.getElementById('resultsBody');
+        resultsBody.innerHTML = '';
+        for (const result of results) {
+            const hasMatch = result.sanctions_matches.length > 0 || result.pep_matches.length > 0;
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${result.name}</td>
+                <td>${result.country || ''}</td>
+                <td>
+                    <span class="badge bg-${hasMatch ? 'danger' : 'success'}">
+                        ${hasMatch ? 'Potential Match' : 'No Match'}
+                    </span>
+                </td>
+                <td>
+                    ${hasMatch ? '<a href="#">View Details</a>' : '-'}
+                </td>
+            `;
+            resultsBody.appendChild(row);
+        }
+    }
+</script>
+{% endblock %}

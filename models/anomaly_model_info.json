@@ -1,0 +1,119 @@
+{
+  "feature_names": [
+    "amount_log",
+    "amount_zscore",
+    "amount_deviation",
+    "amount_percentile",
+    "hour",
+    "day_of_week",
+    "is_weekend",
+    "is_night",
+    "is_business_hours",
+    "txn_count",
+    "txn_frequency",
+    "channel_risk",
+    "type_risk",
+    "is_cross_border",
+    "is_high_value",
+    "is_pep",
+    "customer_risk_numeric",
+    "has_counterparty",
+    "narrative_length"
+  ],
+  "feature_importance": [
+    {
+      "feature": "amount_log",
+      "importance": 0.00016333646432927472
+    },
+    {
+      "feature": "amount_zscore",
+      "importance": 5.056929307917365e-05
+    },
+    {
+      "feature": "is_cross_border",
+      "importance": 7.141213026684622e-06
+    },
+    {
+      "feature": "has_counterparty",
+      "importance": 0.0
+    },
+    {
+      "feature": "hour",
+      "importance": 0.0
+    },
+    {
+      "feature": "is_weekend",
+      "importance": 0.0
+    },
+    {
+      "feature": "day_of_week",
+      "importance": 0.0
+    },
+    {
+      "feature": "txn_count",
+      "importance": 0.0
+    },
+    {
+      "feature": "is_business_hours",
+      "importance": 0.0
+    },
+    {
+      "feature": "txn_frequency",
+      "importance": 0.0
+    },
+    {
+      "feature": "is_night",
+      "importance": 0.0
+    },
+    {
+      "feature": "customer_risk_numeric",
+      "importance": 0.0
+    },
+    {
+      "feature": "channel_risk",
+      "importance": 0.0
+    },
+    {
+      "feature": "type_risk",
+      "importance": 0.0
+    },
+    {
+      "feature": "is_pep",
+      "importance": 0.0
+    },
+    {
+      "feature": "narrative_length",
+      "importance": -1.4780079536830942e-05
+    },
+    {
+      "feature": "amount_percentile",
+      "importance": -0.00011256691983060159
+    },
+    {
+      "feature": "amount_deviation",
+      "importance": -0.0001860299474252035
+    },
+    {
+      "feature": "is_high_value",
+      "importance": -0.00035549244336502504
+    }
+  ],
+  "model_params": {
+    "bootstrap": false,
+    "contamination": 0.4935,
+    "max_features": 0.8,
+    "max_samples": 0.5,
+    "n_estimators": 300,
+    "n_jobs": null,
+    "random_state": 42,
+    "verbose": 0,
+    "warm_start": false
+  },
+  "performance_metrics": {
+    "precision": 0.4774066797642436,
+    "recall": 0.49290060851926976,
+    "f1_score": 0.48502994011976047,
+    "roc_auc": 0.4873595224664034,
+    "average_precision": 0.48117771293172273
+  }
+}

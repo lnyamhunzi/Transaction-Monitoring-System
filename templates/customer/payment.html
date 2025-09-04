@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Make a Payment{% endblock %}
+
+{% block page_title %}Make a Payment{% end block %}
+
+{% block content %}
+<div class="container mt-5">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title text-center">New Payment</h3>
+                </div>
+                <div class="card-body">
+                    <form id="paymentForm">
+                        <div class="mb-3">
+                            <label for="source_account_number" class="form-label">Your Account Number</label>
+                            <select class="form-control" id="source_account_number" name="source_account_number" required>
+                                <!-- Options will be loaded dynamically by JavaScript -->
+                                <option value="">Loading accounts...</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="amount" class="form-label">Amount</label>
+                            <input type="number" class="form-control" id="amount" name="amount" step="0.01" min="0.01" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="currency" class="form-label">Currency</label>
+                            <select class="form-control" id="currency" name="currency" required>
+                                <option value="USD">USD - US Dollar</option>
+                                <option value="ZWL">ZWL - Zimbabwean Dollar</option>
+                                <option value="ZAR">ZAR - South African Rand</option>
+                                <option value="EUR">EUR - Euro</option>
+                                <option value="GBP">GBP - British Pound</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="payee_name" class="form-label">Payee Name</label>
+                            <input type="text" class="form-control" id="payee_name" name="payee_name" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="payee_account" class="form-label">Payee Account Number</label>
+                            <input type="text" class="form-control" id="payee_account" name="payee_account" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="payee_bank" class="form-label">Payee Bank (Optional)</label>
+                            <input type="text" class="form-control" id="payee_bank" name="payee_bank">
+                        </div>
+                        <div class="mb-3">
+                            <label for="reference" class="form-label">Reference/Description</label>
+                            <input type="text" class="form-control" id="reference" name="reference" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100">Submit Payment</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/customer-payment.js"></script>
+{% endblock %}
