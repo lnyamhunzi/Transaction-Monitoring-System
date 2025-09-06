@@ -161,6 +161,14 @@ class AMLDashboard {
             const alerts = await alertsResponse.json();
             
             this.updateAlertsTable(alerts);
+
+            // Load recent transactions
+            const transactionsResponse = await fetch('/api/admin/transactions/recent', { headers });
+            if (transactionsResponse.status === 401) { window.location.href = '/admin/login'; return; }
+            if (!transactionsResponse.ok) throw new Error('Failed to load transactions');
+            const transactions = await transactionsResponse.json();
+
+            this.updateTransactionsTable(transactions);
             
         } catch (error) {
             console.error('Error loading initial data:', error);
@@ -515,6 +523,9 @@ class AMLDashboard {
         if (this.charts.transactionVolume) {
             this.updateTransactionVolumeChart(transaction);
         }
+
+        // Add new transaction to table
+        this.addTransactionToTable(transaction);
     }
     
     /**
@@ -662,6 +673,38 @@ class AMLDashboard {
             `;
             tbody.appendChild(row);
         });
+    }
+    
+    /**
+     * Add transaction to table
+     */
+    addTransactionToTable(transaction) {
+        const tbody = document.querySelector('#transactionsTable tbody');
+        if (!tbody) return;
+
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td>${new Date(transaction.timestamp).toLocaleString()}</td>
+            <td>${transaction.customer_id.substring(0, 8)}...</td>
+            <td>${this.formatCurrency(transaction.amount, transaction.currency)}</td>
+            <td>${transaction.channel}</td>
+            <td><span class="badge bg-${this.getRiskLevel(transaction.risk_score)}">${transaction.risk_score}</span></td>
+            <td><span class="status-badge status-${transaction.status.toLowerCase()}">${transaction.status}</span></td>
+            <td>
+                <div class="btn-group btn-group-sm">
+                    <a href="/monitoring/transactions/${transaction.id}" class="btn btn-outline-primary">
+                        <i class="fas fa-eye"></i>
+                    </a>
+                </div>
+            </td>
+        `;
+        tbody.insertBefore(row, tbody.firstChild);
+
+        // Remove oldest row if table has too many rows (e.g., 100)
+        const rows = tbody.querySelectorAll('tr');
+        if (rows.length > 100) { // Assuming a max of 100 transactions
+            tbody.removeChild(rows[rows.length - 1]);
+        }
     }
     
     /**

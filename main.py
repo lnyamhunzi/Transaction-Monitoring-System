@@ -282,7 +282,6 @@ def get_password_hash(password):
     return pwd_context.hash(password)
 
 
-
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     if expires_delta:
@@ -442,11 +441,22 @@ async def dashboard(request: Request, db: Session = Depends(get_db), current_use
     return templates.TemplateResponse("dashboard.html", {"request": request, "users": users, "user": current_user})
 
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_panel(request: Request):
-    current_user = await get_current_user_from_cookie(request, db=next(get_db()))
+async def admin_panel(request: Request, db: Session = Depends(get_db)):
+    current_user = await get_current_user_from_cookie(request, db=db)
     if isinstance(current_user, RedirectResponse):
         return current_user
-    return templates.TemplateResponse("admin.html", {"request": request, "user": current_user})
+
+    # Fetch recent transactions and alerts from the database
+    recent_transactions = db.query(Transaction).order_by(Transaction.created_at.desc()).limit(10).all()
+    alerts = db.query(Alert).filter(Alert.status == AlertStatus.OPEN).all()
+
+    return templates.TemplateResponse("admin.html", {
+        "request": request,
+        "title": "Admin Dashboard",
+        "recent_transactions": recent_transactions,
+        "alerts": alerts,
+        "user": current_user
+    })
 
 @app.get("/admin/profile", response_class=HTMLResponse)
 async def admin_profile_page(request: Request, current_user: User = Depends(get_current_user_from_cookie)):
@@ -1056,8 +1066,8 @@ async def get_transaction_by_id(transaction_id: str, db: Session = Depends(get_d
 
 @app.get("/api/monitoring/customers")
 async def api_get_customers(request: Request, db: Session = Depends(get_db),
-                              search_term: Optional[str] = None,
-                              risk_rating: Optional[str] = None):
+                                 search_term: Optional[str] = None,
+                                 risk_rating: Optional[str] = None):
     params = request.query_params
     
     draw = int(params.get("draw", 1))
@@ -1122,7 +1132,6 @@ async def export_logs(current_user: User = Depends(get_current_user_dependency))
     dummy_log_content += f"{datetime.now().isoformat()},INFO,User {current_user.username} exported logs\n"
     dummy_log_content += f"{datetime.now().isoformat()},WARNING,Dummy warning message\n"
     return Response(content=dummy_log_content, media_type="text/csv")
-
 
 
 
@@ -1432,195 +1441,6 @@ async def update_alert(
 async def get_alerts_metrics(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
     if isinstance(current_user, RedirectResponse):
         return current_user
-    open_alerts = db.query(Alert).filter(Alert.status == "OPEN").count()
-    closed_alerts = db.query(Alert).filter(Alert.status == "CLOSED").count()
-    total_alerts = open_alerts + closed_alerts
-    sanctions_hits = db.query(Alert).filter(Alert.alert_type == "SANCTIONS_HIT").count()
-    avg_response_time_minutes = db.query(func.avg(Alert.response_time_minutes)).filter(Alert.status == "CLOSED").scalar() or 0.0
-    false_positive_alerts = db.query(Alert).filter(Alert.status == "FALSE_POSITIVE").count()
-    false_positive_rate = (false_positive_alerts / closed_alerts * 100) if closed_alerts > 0 else 0.0
-
-    return {
-        "open_alerts": open_alerts,
-        "closed_alerts": closed_alerts,
-        "total_alerts": total_alerts,
-        "average_risk_score": db.query(func.avg(Alert.risk_score)).scalar() or 0.0,
-        "sanctions_hits": sanctions_hits,
-        "avg_response_time": avg_response_time_minutes / 60, # Convert to hours
-        "false_positive_rate": false_positive_rate
-    }
-
-@app.get("/api/alerts/export")
-async def export_alerts(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
-    if isinstance(current_user, RedirectResponse):
-        return current_user
-    
-    output = "alert_id,alert_type,risk_score,status,created_at,transaction_id,customer_id,description\n"
-    
-    try:
-        alerts = db.query(Alert).options(joinedload(Alert.transaction)).all() # Eager load transaction
-        for alert in alerts:
-            customer_id = alert.transaction.customer_id if alert.transaction else ""
-            transaction_id = alert.transaction_id if alert.transaction_id else ""
-            
-            # Sanitize description to prevent CSV breaking
-            description = alert.description.replace(",", ";").replace("\n", " ").replace("\r", "")
-            
-            output += f'{alert.id},{alert.alert_type},{alert.risk_score},{alert.status},{alert.created_at},{transaction_id},{customer_id},{description}\n'
-        
-        return Response(content=output, media_type="text/csv")
-    except Exception as e:
-        # Re-raise as HTTPException to send a proper error response to the frontend
-        raise HTTPException(status_code=500, detail=f"Failed to export alerts due to an internal server error: {e}")
-
-
-@app.post("/api/alerts/bulk")
-async def bulk_alert_action(
-    action_data: BulkAlertAction,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_dependency)
-):
-    updated_count = 0
-    for alert_id in action_data.alert_ids:
-        alert = db.query(Alert).filter(Alert.id == alert_id).first()
-        if not alert:
-            logger.warning(f"Alert {alert_id} not found for bulk action.")
-            continue
-
-        if action_data.action == "assign" and action_data.assigned_to:
-            alert.assigned_to = action_data.assigned_to
-            updated_count += 1
-        elif action_data.action == "update_status" and action_data.status:
-            alert.status = action_data.status
-            updated_count += 1
-        elif action_data.action == "update_priority" and action_data.priority:
-            alert.priority = action_data.priority
-            updated_count += 1
-        elif action_data.action == "mark_false_positive":
-            alert.status = "FALSE_POSITIVE"
-            updated_count += 1
-        elif action_data.action == "create_cases":
-            # This would typically involve creating a case for each selected alert
-            # For simplicity, we'll just log for now
-            logger.info(f"Creating case for alert {alert_id} (bulk action)")
-            # Example: await case_service.create_case_from_alert(alert_id, db)
-            updated_count += 1
-        
-        if action_data.notes:
-            alert.resolution_notes = action_data.notes # Assuming notes apply to all actions
-
-        db.add(alert)
-    db.commit()
-    return {"message": f"Bulk action completed for {updated_count} alerts.", "updated_count": updated_count}
-
-@app.post("/api/alerts/{alert_id}/assign")
-async def assign_alert(
-    alert_id: str,
-    assign_data: AssignAlert,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_dependency)
-):
-    alert = db.query(Alert).filter(Alert.id == alert_id).first()
-    if not alert:
-        raise HTTPException(status_code=404, detail="Alert not found")
-    
-    alert.assigned_to = assign_data.user_id
-    db.add(alert)
-    db.commit()
-    return {"message": f"Alert {alert_id} assigned to {assign_data.user_id}"}
-
-@app.get("/api/dashboard/aml-control-summary")
-async def get_aml_control_summary(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
-    if isinstance(current_user, RedirectResponse):
-        return current_user
-    """Get AML control summary"""
-    aml_summary = db.query(
-        Alert.alert_type,
-        func.avg(Alert.risk_score).label('avg_risk'),
-        func.count(Alert.id).label('count')
-    ).group_by(Alert.alert_type).all()
-
-    return [
-        {
-            "control_type": item.alert_type,
-            "average_risk_score": float(item.avg_risk or 0),
-            "triggered_count": item.count
-        }
-        for item in aml_summary
-    ]
-
-
-
-@app.get("/api/dashboard/stats")
-async def get_dashboard_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
-    if isinstance(current_user, RedirectResponse):
-        return current_user
-    """Get dashboard statistics"""
-    today = datetime.now().date()
-    yesterday = today - timedelta(days=1)
-
-    # Transaction stats
-    total_transactions = db.query(Transaction).count()
-    today_transactions = db.query(Transaction).filter(func.date(Transaction.created_at) == today).count()
-    yesterday_transactions = db.query(Transaction).filter(func.date(Transaction.created_at) == yesterday).count()
-    transactions_change = ((today_transactions - yesterday_transactions) / yesterday_transactions * 100) if yesterday_transactions > 0 else 0
-
-    # Alert stats
-    open_alerts = db.query(Alert).filter(Alert.status == "OPEN").count()
-    high_risk_alerts = db.query(Alert).filter(
-        and_(Alert.status == "OPEN", Alert.risk_score >= 0.8)
-    ).count()
-    today_alerts = db.query(Alert).filter(func.date(Alert.created_at) == today).count()
-    yesterday_alerts = db.query(Alert).filter(func.date(Alert.created_at) == yesterday).count()
-    alerts_change = ((today_alerts - yesterday_alerts) / yesterday_alerts * 100) if yesterday_alerts > 0 else 0
-
-    # Case stats
-    cases_opened_today = db.query(Case).filter(func.date(Case.created_at) == today).count()
-    cases_opened_yesterday = db.query(Case).filter(func.date(Case.created_at) == yesterday).count()
-    cases_change = ((cases_opened_today - cases_opened_yesterday) / cases_opened_yesterday * 100) if cases_opened_yesterday > 0 else 0
-
-    # Risk distribution
-    risk_distribution = db.query(
-        Alert.alert_type,
-        func.avg(Alert.risk_score).label('avg_risk'),
-        func.count(Alert.id).label('count')
-    ).group_by(Alert.alert_type).all()
-    
-    # Alert Trends
-    alert_trends = db.query(func.date(Alert.created_at), func.sum(case((Alert.risk_score >= 0.8, 1), else_=0)), func.sum(case((Alert.risk_score >= 0.6, 1), else_=0))).group_by(func.date(Alert.created_at)).order_by(func.date(Alert.created_at)).all()
-
-    response_data = {
-        "total_transactions": total_transactions,
-        "today_transactions": today_transactions,
-        "transactions_change": round(transactions_change, 2),
-        "open_alerts": open_alerts,
-        "high_risk_alerts": high_risk_alerts,
-        "alerts_change": round(alerts_change, 2),
-        "cases_opened_today": cases_opened_today,
-        "cases_change": round(cases_change, 2),
-        "risk_distribution": [
-            {
-                "type": item.alert_type,
-                "avg_risk": float(item.avg_risk or 0),
-                "count": item.count
-            }
-            for item in risk_distribution
-        ],
-        "alert_trends": {
-            "labels": [str(row[0]) for row in alert_trends],
-            "high_risk": [row[1] for row in alert_trends],
-            "medium_risk": [row[2] for row in alert_trends]
-        }
-    }
-    logger.info(f"Dashboard stats: {response_data}")
-    return response_data
-
-
-
-@app.get("/api/cases/metrics")
-async def get_cases_metrics(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
-    if isinstance(current_user, RedirectResponse):
-        return current_user
     """Get case management metrics"""
     metrics = await case_service.get_case_metrics(db)
     return metrics
@@ -1702,7 +1522,6 @@ async def get_case_distribution(db: Session = Depends(get_db), current_user: Use
         "labels": [item.status.value for item in case_distribution],
         "data": [item.count for item in case_distribution]
     }
-
 
 
 
@@ -1895,7 +1714,7 @@ async def generate_report(report: dict, db: Session = Depends(get_db), current_u
             customer = db.query(Customer).filter(
                 Customer.customer_id == transaction.customer_id
             ).first()
-            output += f'{alert.id},{transaction.id},{customer.full_name if customer else "Unknown"},{transaction.account_number},{transaction.amount},{transaction.currency},{alert.risk_score},{alert.alert_type},{alert.description},{alert.created_at}\n'
+            output += f"{alert.id},{transaction.id},{customer.full_name if customer else 'Unknown'},{transaction.account_number},{transaction.amount},{transaction.currency},{alert.risk_score},{alert.alert_type},{alert.description},{alert.created_at}\n"
         return Response(content=output, media_type="text/csv")
     
     return {"message": "Report generated successfully"}
