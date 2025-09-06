@@ -50,7 +50,8 @@
                             <th>Name</th>
                             <th>Country</th>
                             <th>Match Status</th>
-                            <th>Details</th>
+                            <th>Sanctions/PEP Matches</th>
+                            <th>Adverse Media Hits</th>
                         </tr>
                     </thead>
                     <tbody id="resultsBody">
@@ -75,13 +76,8 @@
             },
             body: JSON.stringify({ name, country }),
         });
-        const results = await response.json();
-        displayResults([{
-            name,
-            country,
-            sanctions_matches: results.sanctions_matches,
-            pep_matches: results.pep_matches
-        }]);
+        const result = await response.json(); // Renamed to 'result' for clarity
+        displayResults([result]); // Pass the single result object in an array
     });
 
     document.getElementById('bulkScreeningForm').addEventListener('submit', async function(event) {
@@ -102,7 +98,31 @@
         const resultsBody = document.getElementById('resultsBody');
         resultsBody.innerHTML = '';
         for (const result of results) {
-            const hasMatch = result.sanctions_matches.length > 0 || result.pep_matches.length > 0;
+            const hasSanctionsOrPepMatch = result.sanctions_matches.length > 0 || result.pep_matches.length > 0;
+            const hasAdverseMedia = result.adverse_media_hits && result.adverse_media_hits.length > 0;
+            const hasMatch = hasSanctionsOrPepMatch || hasAdverseMedia;
+
+            let sanctionsPepDetails = '-';
+            if (hasSanctionsOrPepMatch) {
+                sanctionsPepDetails = '<ul>';
+                result.sanctions_matches.forEach(match => {
+                    sanctionsPepDetails += `<li>${match.matched_name} (${match.entity_type}, Score: ${match.similarity_score.toFixed(2)})</li>`;
+                });
+                result.pep_matches.forEach(match => {
+                    sanctionsPepDetails += `<li>${match.matched_name} (PEP, Score: ${match.similarity_score.toFixed(2)})</li>`;
+                });
+                sanctionsPepDetails += '</ul>';
+            }
+
+            let adverseMediaDetails = '-';
+            if (hasAdverseMedia) {
+                adverseMediaDetails = '<ul>';
+                result.adverse_media_hits.forEach(hit => {
+                    adverseMediaDetails += `<li>${hit}</li>`;
+                });
+                adverseMediaDetails += '</ul>';
+            }
+
             const row = document.createElement('tr');
             row.innerHTML = `
                 <td>${result.name}</td>
@@ -112,9 +132,8 @@
                         ${hasMatch ? 'Potential Match' : 'No Match'}
                     </span>
                 </td>
-                <td>
-                    ${hasMatch ? '<a href="#">View Details</a>' : '-'}
-                </td>
+                <td>${sanctionsPepDetails}</td>
+                <td>${adverseMediaDetails}</td>
             `;
             resultsBody.appendChild(row);
         }

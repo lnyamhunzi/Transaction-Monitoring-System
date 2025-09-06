@@ -21,18 +21,29 @@
     <link href="/static/css/banking-dashboard.css" rel="stylesheet">
     <link href="/static/css/redesign.css" rel="stylesheet">
     
+    {% if customer %}
+    <link href="/static/css/customer_portal.css" rel="stylesheet">
+    {% endif %}
+    
     {% block extra_head %}{% endblock %}
 </head>
-<body>
+<body class="{% if customer %}customer-portal{% endif %}">
     <div class="app-container">
+        {% if user or customer %}
         <!-- Sidebar -->
         <nav class="sidebar">
             <div class="sidebar-brand">
+                {% if customer %}
+                <h3><i class="fas fa-user-circle"></i> Welcome</h3>
+                <p>{{ customer.full_name }}</p>
+                {% else %}
                 <h3><i class="fas fa-shield-alt"></i> AML Monitor</h3>
                 <p>Transaction Monitoring System</p>
+                {% endif %}
             </div>
             
             <ul class="sidebar-nav">
+                {% if user and user.role == 'admin' %}
                 <li class="nav-item">
                     <a href="/" class="nav-link {% if request.url.path == '/' %}active{% endif %}">
                         <i class="nav-icon fas fa-tachometer-alt"></i>
@@ -48,7 +59,7 @@
                 </li>
                 
                 <li class="nav-item">
-                    <a href="/cases" class="nav-link {% if request.url.path == '/cases' %}active{% endif %}">
+                    <a href="/cases" class="nav-link {% if request.url.path == '/cases' %}active{% endif %}>">
                         <i class="nav-icon fas fa-folder-open"></i>
                         Case Management
                     </a>
@@ -127,9 +138,30 @@
                         Administration
                     </a>
                 </li>
+                {% elif customer %}
+                <li class="nav-item">
+                    <a href="/portal/dashboard" class="nav-link {% if request.url.path == '/portal/dashboard' %}active{% endif %}">
+                        <i class="nav-icon fas fa-home"></i>
+                        My Dashboard
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="/portal/payment" class="nav-link {% if request.url.path == '/portal/payment' %}active{% endif %}">
+                        <i class="nav-icon fas fa-money-bill-wave"></i>
+                        Make Payment
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="/portal/transfer" class="nav-link {% if request.url.path == '/portal/transfer' %}active{% endif %}">
+                        <i class="nav-icon fas fa-exchange-alt"></i>
+                        Transfer Funds
+                    </a>
+                </li>
+                {% endif %}
             </ul>
             
             <!-- System Status -->
+            {% if user and user.role == 'admin' %}
             <div class="mt-auto p-3 border-top border-light">
                 <div class="realtime-indicator">
                     <span class="realtime-dot"></span>
@@ -139,10 +171,12 @@
                     Last Update: <span id="lastUpdate">--:--</span>
                 </small>
             </div>
+            {% endif %}
         </nav>
+        {% endif %}
         
         <!-- Main Content -->
-        <main class="main-content">
+        <main class="main-content {% if not user and not customer %}full-width{% endif %}">
             <!-- Header -->
             <header class="header">
                 <div class="header-title">
@@ -173,7 +207,7 @@
                     </div>
                     
                     <!-- User Menu -->
-                    {% if user %}
+                    {% if user and user.role == 'admin' %}
                     <div class="user-menu dropdown">
                         <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
                             <div class="user-avatar">
@@ -182,14 +216,31 @@
                             <span>{{ user.full_name }}</span>
                         </button>
                         <ul class="dropdown-menu dropdown-menu-end">
-                            <li><a class="dropdown-item" href="#"><i class="fas fa-user-circle me-2"></i>Profile</a></li>
-                            <li><a class="dropdown-item" href="#"><i class="fas fa-cog me-2"></i>Settings</a></li>
+                            <li><a class="dropdown-item" href="/admin/profile"><i class="fas fa-user-circle me-2"></i>Admin Profile</a></li>
+                            <li><a class="dropdown-item" href="/admin"><i class="fas fa-cog me-2"></i>Admin Settings</a></li>
                             <li><hr class="dropdown-divider"></li>
-                            <li><a class="dropdown-item" href="#" id="logout-button"><i class="fas fa-sign-out-alt me-2"></i>Logout</a></li>
+                            <li><a class="dropdown-item" href="/admin/login" id="admin-logout-button"><i class="fas fa-sign-out-alt me-2"></i>Logout</a></li>
+
+                        </ul>
+                    </div>
+                    {% elif customer %}
+                    <div class="user-menu dropdown">
+                        <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                            <div class="user-avatar">
+                                <i class="fas fa-user"></i>
+                            </div>
+                            <span>{{ customer.full_name }}</span>
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li><a class="dropdown-item" href="#"><i class="fas fa-user-circle me-2"></i>My Profile</a></li>
+                            <li><a class="dropdown-item" href="#"><i class="fas fa-cog me-2"></i>Account Settings</a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item" href="#" id="customer-logout-button"><i class="fas fa-sign-out-alt me-2"></i>Logout</a></li>
                         </ul>
                     </div>
                     {% else %}
-                    <a href="/admin/login" class="btn btn-primary">Logout</a>
+                    <a href="/admin/login" class="btn btn-primary">Admin Login</a>
+                    <a href="/portal/login" class="btn btn-secondary ms-2">Customer Login</a>
                     {% endif %}
                 </div>
             </header>
@@ -218,11 +269,12 @@
     <div id="modalsContainer"></div>
     
     <!-- Scripts -->
-    <script src="/static/js/auth.js"></script>
+    
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
     <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
     <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+    <script src="/static/js/utils.js"></script>
     
     <!-- Base JavaScript -->
     <script>
@@ -231,7 +283,7 @@
         //     const token = localStorage.getItem('admin_token');
         //     if (!token) {
         //         window.location.href = '/admin/login';
-        //     }
+        
         // }
 
         // Global utilities and base functionality
@@ -311,26 +363,52 @@
     {% block extra_scripts %}
 <script>
     document.addEventListener('DOMContentLoaded', () => {
-        const logoutButton = document.getElementById('logout-button');
-        if (logoutButton) {
-            logoutButton.addEventListener('click', async (e) => {
+        const adminLogoutButton = document.getElementById('admin-logout-button');
+        const customerLogoutButton = document.getElementById('customer-logout-button');
+
+        if (adminLogoutButton) {
+            adminLogoutButton.addEventListener('click', async (e) => {
                 e.preventDefault();
                 try {
                     const response = await fetch('/api/admin/logout', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
+                        },
+                        credentials: 'include' // Ensure cookies are sent
+                    });
+                    if (response.ok) {
+                        // Redirect to admin login page after successful logout
+                        window.location.href = '/admin/login';
+                    } else {
+                        alert('Admin logout failed');
+                    }
+                } catch (error) {
+                    console.error('Error during admin logout:', error);
+                    alert('An error occurred during admin logout.');
+                }
+            });
+        }
+
+        if (customerLogoutButton) {
+            customerLogoutButton.addEventListener('click', async (e) => {
+                e.preventDefault();
+                try {
+                    const response = await fetch('/api/customer/logout', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
                         }
                     });
                     if (response.ok) {
-                        // Redirect to login page after successful logout
-                        window.location.href = '/admin/login';
+                        // Redirect to customer login page after successful logout
+                        window.location.href = '/portal/login';
                     } else {
-                        alert('Logout failed');
+                        alert('Customer logout failed');
                     }
                 } catch (error) {
-                    console.error('Error during logout:', error);
-                    alert('An error occurred during logout.');
+                    console.error('Error during customer logout:', error);
+                    alert('An error occurred during customer logout.');
                 }
             });
         }

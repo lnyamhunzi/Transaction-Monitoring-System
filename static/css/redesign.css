@@ -313,13 +313,13 @@ body {
 /* Case Management Page Specifics */
 .workflow-steps {
     position: relative;
-    padding-left: 20px;
+    /* padding-left: 60px; Removed */
 }
 
 .workflow-steps::before {
     content: '';
     position: absolute;
-    left: 39px;
+    left: 19px; /* Adjusted to align with new padding of workflow-step */
     top: 10px;
     bottom: 10px;
     width: 2px;
@@ -331,9 +331,7 @@ body {
 }
 
 .step-icon {
-    position: absolute;
-    left: -20px;
-    top: 0;
+    /* No absolute positioning here */
     z-index: 1;
 }
 

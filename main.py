@@ -1,8 +1,3 @@
-"""
-Banking AML and Transaction Monitoring System
-FastAPI backend with comprehensive transaction monitoring capabilities
-"""
-
 from __future__ import annotations
 
 import os
@@ -36,6 +31,7 @@ from notification_service import NotificationService
 from currency_service import CurrencyService
 from case_management import CaseManagementService
 from config import settings
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -95,10 +91,23 @@ async def broadcast_updates():
                 "currency": transaction.currency,
                 "channel": transaction.channel,
                 "created_at": transaction.created_at.isoformat(),
-                "status": status
+                "status": status,
+                "risk_score": transaction.risk_score,
+                "ml_prediction": transaction.ml_prediction if hasattr(transaction, 'ml_prediction') else None
             })
         
         await manager.broadcast({"type": "transaction_stream", "data": transactions_data})
+
+async def broadcast_system_metrics():
+    while True:
+        await asyncio.sleep(5) # Broadcast every 5 seconds
+        # In a real system, you would fetch actual system metrics here
+        # For now, we'll use dummy data or data from get_system_status API
+        db = next(get_db())
+        system_status = await get_system_status(db=db, current_user=None) # current_user=None for background task
+        db.close()
+        
+        await manager.broadcast({"type": "system_metrics", "data": system_status})
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -113,9 +122,9 @@ async def lifespan(app: FastAPI):
         # Create default admin user
         db = next(get_db())
         admin_user = db.query(User).filter(User.username == "admin@mugonat.com").first()
+        hashed_password = get_password_hash("Mugonat#99")
         if not admin_user:
             logger.info("Default admin user not found, creating it...")
-            hashed_password = get_password_hash("Mugonat#99")
             new_admin = User(
                 username="admin@mugonat.com",
                 hashed_password=hashed_password,
@@ -127,13 +136,18 @@ async def lifespan(app: FastAPI):
             db.commit()
             logger.info("Default admin user created.")
         else:
-            logger.info("Default admin user already exists.")
+            logger.info("Default admin user already exists, ensuring password is correct.")
+            admin_user.hashed_password = hashed_password # Force update password
+            db.commit()
+            db.refresh(admin_user)
+            logger.info("Default admin user password ensured.")
         db.close()
 
     except Exception as e:
         logger.error(f"Error during startup: {e}")
     # ML models will be initialized on first use
     asyncio.create_task(broadcast_updates())
+    asyncio.create_task(broadcast_system_metrics())
     yield
     # Shutdown
     logger.info("Shutting down system")
@@ -365,24 +379,53 @@ async def get_current_customer(request: Request, db: Session = Depends(get_db)):
     return customer
 
 async def get_current_user_from_cookie(request: Request, db: Session = Depends(get_db)):
-    try:
-        token = request.cookies.get("admin_token")
-        if not token:
-            return RedirectResponse(url="/admin/login", status_code=303)
+    logger.info("Entering get_current_user_from_cookie")
+    logger.info(f"Attempting to get current user from cookie. Request headers: {request.headers}")
+    logger.info(f"Attempting to get current user from cookie. Request cookies: {request.cookies}")
+    
+    # Try to get token from cookie
+    cookie_token = request.cookies.get("admin_token")
+    logger.info(f"Cookie token: {cookie_token}")
 
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    # Try to get token from Authorization header (for localStorage approach)
+    auth_header = request.headers.get("Authorization")
+    header_token = None
+    if auth_header and auth_header.startswith("Bearer "):
+        header_token = auth_header.split(" ")[1]
+        logger.info(f"Header token: {header_token[:10]}...")
+
+    # Determine the token to use: header token takes precedence if present, otherwise cookie token
+    auth_token = header_token if header_token else cookie_token
+    logger.info(f"Auth token (after determining precedence): {auth_token[:10]}..." if auth_token else "No auth token found.")
+
+    if not auth_token:
+        logger.warning("No admin_token found in cookie or header. Raising 401 HTTPException.")
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        payload = jwt.decode(auth_token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        logger.info(f"Decoded JWT payload: {payload}")
         username: str = payload.get("sub")
+        logger.info(f"Username from payload: {username}")
         if username is None:
-            return RedirectResponse(url="/admin/login", status_code=303)
+            logger.warning("Token payload does not contain username (sub).")
+            raise HTTPException(status_code=401, detail="Could not validate credentials")
 
         user = db.query(User).filter(User.username == username).first()
+        logger.info(f"User found in DB: {user is not None}")
         if user is None:
-            return RedirectResponse(url="/admin/login", status_code=303)
+            logger.warning(f"User {username} not found in DB.")
+            raise HTTPException(status_code=401, detail="Could not validate credentials")
+        
+        logger.info(f"User {username} successfully authenticated.")
         return user
 
-    except JWTError:
-        return RedirectResponse(url="/admin/login", status_code=303)
-
+    except JWTError as e:
+        logger.error(f"JWTError during token decoding in get_current_user_from_cookie: {e}")
+        raise HTTPException(status_code=401, detail="Could not validate credentials")
+    except Exception as e:
+        logger.error(f"Unexpected error in get_current_user_from_cookie: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error during authentication")
 
 
 # --- Frontend Routes ---
@@ -399,10 +442,17 @@ async def dashboard(request: Request, db: Session = Depends(get_db), current_use
     return templates.TemplateResponse("dashboard.html", {"request": request, "users": users, "user": current_user})
 
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_panel(request: Request, current_user: User = Depends(get_current_user_from_cookie)):
+async def admin_panel(request: Request):
+    current_user = await get_current_user_from_cookie(request, db=next(get_db()))
     if isinstance(current_user, RedirectResponse):
         return current_user
     return templates.TemplateResponse("admin.html", {"request": request, "user": current_user})
+
+@app.get("/admin/profile", response_class=HTMLResponse)
+async def admin_profile_page(request: Request, current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    return templates.TemplateResponse("admin_profile.html", {"request": request, "user": current_user})
 
 @app.get("/cases", response_class=HTMLResponse)
 async def case_management(request: Request, current_user: User = Depends(get_current_user_from_cookie)):
@@ -436,15 +486,26 @@ async def customer_register_page(request: Request):
 async def customer_dashboard_page(request: Request, db: Session = Depends(get_db), current_customer: Customer = Depends(get_current_customer)):
     accounts = db.query(Account).filter(Account.customer_id == current_customer.customer_id).all()
     transactions = db.query(Transaction).filter(Transaction.customer_id == current_customer.customer_id).order_by(desc(Transaction.created_at)).limit(10).all()
-    return templates.TemplateResponse("customer/dashboard.html", {"request": request, "customer": current_customer, "accounts": accounts, "transactions": transactions})
+    
+    transactions_data = [
+        {
+            "date": t.created_at.strftime('%Y-%m-%d %H:%M'),
+            "type": t.transaction_type,
+            "amount": f"{t.currency} {t.amount:.2f}",
+            "description": t.narrative,
+            "channel": t.channel
+        } for t in transactions
+    ]
+    
+    return templates.TemplateResponse("customer/dashboard.html", {"request": request, "customer": current_customer, "accounts": accounts, "transactions_data": transactions_data})
 
 @app.get("/portal/payment", response_class=HTMLResponse)
-async def customer_payment_page(request: Request):
-    return templates.TemplateResponse("customer/payment.html", {"request": request})
+async def customer_payment_page(request: Request, current_customer: Customer = Depends(get_current_customer)):
+    return templates.TemplateResponse("customer/payment.html", {"request": request, "customer": current_customer})
 
 @app.get("/portal/transfer", response_class=HTMLResponse)
-async def customer_transfer_page(request: Request):
-    return templates.TemplateResponse("customer/transfer.html", {"request": request})
+async def customer_transfer_page(request: Request, current_customer: Customer = Depends(get_current_customer)):
+    return templates.TemplateResponse("customer/transfer.html", {"request": request, "customer": current_customer})
 
 # --- Monitoring ---
 @app.get('/monitoring/real-time', response_class=HTMLResponse)
@@ -478,18 +539,38 @@ async def sanctions_screening(request: Request, current_user: User = Depends(get
 
 @app.post("/api/sanctions/screen/single")
 async def screen_single_entity(screening_request: ScreeningRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
-    entity = {
-        "name": screening_request.name,
-        "type": "ENTITY",
-        "date_of_birth": None,
-        "nationality": screening_request.country
+    logger.info(f"Received single screening request: {screening_request.dict()}")
+    # The screen_transaction method expects transaction_data, so we'll adapt the screening_request
+    # For single entity screening, we can construct a dummy transaction_data
+    transaction_data = {
+        "customer_id": "single_entity_screening", # Dummy ID
+        "counterparty_name": screening_request.name,
+        "counterparty_country": screening_request.country, # Pass country for screening
+        "counterparty_bank": None, # Not provided in single screening
+        "amount": 0, # Dummy value
+        "currency": "USD", # Dummy value
+        "channel": "ManualScreening" # Dummy value
     }
-    sanctions_matches = await sanctions_engine.screen_against_sanctions(entity, db)
-    pep_matches = await sanctions_engine.screen_against_peps(entity, db)
-    return {"sanctions_matches": sanctions_matches, "pep_matches": pep_matches}
+    logger.info(f"Constructed transaction_data for single screening: {transaction_data}")
+    
+    screening_results = await sanctions_engine.screen_transaction(transaction_data, db)
+    logger.info(f"Sanctions engine returned for single screening: {screening_results}")
+    
+    # Extract relevant parts for the frontend
+    return {
+        "name": screening_request.name,
+        "country": screening_request.country,
+        "sanctions_matches": screening_results.get("matches", []),
+        "pep_matches": [match for match in screening_results.get("matches", []) if match.get("entity_type") == "PEP"], # Filter PEP matches
+        "adverse_media_hits": screening_results.get("adverse_media_hits", []),
+        "matched": screening_results.get("matched", False),
+        "risk_score": screening_results.get("risk_score", 0.0),
+        "details": screening_results.get("details", "")
+    }
 
 @app.post("/api/sanctions/screen/bulk")
 async def screen_bulk_entities(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
+    logger.info(f"Received bulk screening request for file: {file.filename}")
     results = []
     try:
         contents = await file.read()
@@ -499,22 +580,37 @@ async def screen_bulk_entities(file: UploadFile = File(...), db: Session = Depen
             if len(parts) >= 1:
                 name = parts[0]
                 country = parts[1] if len(parts) > 1 else None
-                entity = {
-                    "name": name,
-                    "type": "ENTITY",
-                    "date_of_birth": None,
-                    "nationality": country
+                logger.info(f"Processing bulk entry - Name: {name}, Country: {country}")
+                
+                # Construct dummy transaction_data for screen_transaction
+                transaction_data = {
+                    "customer_id": "bulk_entity_screening", # Dummy ID
+                    "counterparty_name": name,
+                    "counterparty_country": country, # Pass country for screening
+                    "counterparty_bank": None,
+                    "amount": 0,
+                    "currency": "USD",
+                    "channel": "BulkScreening"
                 }
-                sanctions_matches = await sanctions_engine.screen_against_sanctions(entity, db)
-                pep_matches = await sanctions_engine.screen_against_peps(entity, db)
+                logger.info(f"Constructed transaction_data for bulk screening: {transaction_data}")
+                
+                screening_results = await sanctions_engine.screen_transaction(transaction_data, db)
+                logger.info(f"Sanctions engine returned for bulk entry: {screening_results}")
+                
                 results.append({
                     "name": name,
                     "country": country,
-                    "sanctions_matches": sanctions_matches,
-                    "pep_matches": pep_matches
+                    "sanctions_matches": screening_results.get("matches", []),
+                    "pep_matches": [match for match in screening_results.get("matches", []) if match.get("entity_type") == "PEP"],
+                    "adverse_media_hits": screening_results.get("adverse_media_hits", []),
+                    "matched": screening_results.get("matched", False),
+                    "risk_score": screening_results.get("risk_score", 0.0),
+                    "details": screening_results.get("details", "")
                 })
     except Exception as e:
+        logger.error(f"Error during bulk screening: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to process file: {e}")
+    logger.info(f"Bulk screening completed. Total results: {len(results)}")
     return results
 
 
@@ -567,8 +663,8 @@ async def register_user(user: UserCreate, db: Session = Depends(get_db)):
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
-@app.post("/api/admin/token", response_model=Token)
-async def login_for_access_token_admin(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+@app.post("/api/admin/token")
+async def login_for_access_token_admin(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
@@ -580,11 +676,29 @@ async def login_for_access_token_admin(form_data: OAuth2PasswordRequestForm = De
     access_token = create_access_token(
         data={"sub": user.username}, expires_delta=access_token_expires
     )
-    return {"access_token": access_token, "token_type": "bearer"}
+    
+    # Set the admin_token as a non-HttpOnly cookie (accessible by JS)
+    response.set_cookie(
+        key="admin_token",
+        value=access_token,
+        httponly=False, # Changed to False for localStorage approach
+        max_age=access_token_expires.total_seconds(),
+        expires=access_token_expires.total_seconds(),
+        samesite="Lax",
+        secure=not settings.DEBUG, # True if not in debug mode (i.e., HTTPS), False for HTTP
+        path="/"
+    )
+    logger.info(f"DEBUG setting: {settings.DEBUG}, Secure cookie flag: {not settings.DEBUG}")
+    logger.info(f"Admin token cookie set for user: {user.username}")
+    logger.info(f"Access token value (first 10 chars): {access_token[:10]}...")
+    logger.info("response.set_cookie call executed.")
+    logger.info(f"Set-Cookie header: {response.headers.get('Set-Cookie')}")
+    logger.info(f"Set-Cookie header: {response.headers.get('Set-Cookie')}")
+    return {"message": "Login successful", "access_token": access_token, "token_type": "bearer"}
 
 @app.post("/api/admin/logout")
 async def admin_logout(response: Response):
-    response.delete_cookie(key="admin_token")
+    response.delete_cookie(key="admin_token", path="/", samesite="Lax")
     logger.info("Admin token cookie deleted.")
     return {"message": "Logged out successfully"}
 
@@ -814,6 +928,184 @@ async def get_recent_alerts(db: Session = Depends(get_db), limit: int = 50):
         } for a in alerts
     ]
 
+@app.get("/api/admin/transactions/recent")
+async def get_admin_recent_transactions(db: Session = Depends(get_db), limit: int = 100, time_range: str = "30d"):
+    end_date = datetime.now()
+    if time_range == "7d":
+        start_date = end_date - timedelta(days=7)
+    elif time_range == "30d":
+        start_date = end_date - timedelta(days=30)
+    else:
+        start_date = end_date - timedelta(hours=24)
+
+    logger.info(f"Fetching recent transactions for time_range={time_range}, start_date={start_date}, end_date={end_date}")
+
+    transactions = db.query(Transaction).filter(Transaction.created_at.between(start_date, end_date)).order_by(desc(Transaction.created_at)).limit(limit).all()
+    
+    logger.info(f"Returned {len(transactions)} transactions.")
+
+    return [
+        {
+            "id": str(t.id),
+            "customer_id": t.customer_id,
+            "amount": t.amount,
+            "currency": t.currency,
+            "channel": t.channel,
+            "risk_score": t.risk_score,
+            "status": t.status.value if hasattr(t.status, 'value') else str(t.status),
+            "timestamp": t.created_at.isoformat(),
+        } for t in transactions
+    ]
+
+@app.get("/api/monitoring/transactions")
+async def api_get_transactions(request: Request, db: Session = Depends(get_db),
+                                 search_term: Optional[str] = None,
+                                 transaction_type: Optional[str] = None,
+                                 status: Optional[str] = None,
+                                 date: Optional[str] = None):
+    params = request.query_params
+    
+    draw = int(params.get("draw", 1))
+    start = int(params.get("start", 0))
+    length = int(params.get("length", 10))
+    
+    query = db.query(Transaction)
+    
+    # Apply filters
+    if search_term:
+        query = query.filter(or_(
+            Transaction.customer_id.ilike(f"%{search_term}%"),
+            Transaction.id.ilike(f"%{search_term}%"),
+            Transaction.account_number.ilike(f"%{search_term}%")
+        ))
+    
+    if transaction_type and transaction_type != "all":
+        query = query.filter(Transaction.transaction_type == transaction_type)
+    
+    if status and status != "all":
+        query = query.filter(Transaction.status == status)
+    
+    if date:
+        try:
+            filter_date = datetime.strptime(date, "%Y-%m-%d").date()
+            query = query.filter(func.date(Transaction.created_at) == filter_date)
+        except ValueError:
+            pass # Ignore invalid date format
+
+    total_records = db.query(Transaction).count() # Total records before filtering
+    records_filtered = query.count() # Total records after filtering
+    
+    transactions = query.order_by(desc(Transaction.created_at)).offset(start).limit(length).all()
+    
+    return {
+        "draw": draw,
+        "recordsTotal": total_records,
+        "recordsFiltered": records_filtered,
+        "data": [
+            {
+                "id": str(t.id),
+                "customer_id": t.customer_id,
+                "transaction_type": t.transaction_type,
+                "amount": t.amount,
+                "currency": t.currency,
+                "status": t.status.value if hasattr(t.status, 'value') else str(t.status),
+                "created_at": t.created_at.isoformat(),
+            } for t in transactions
+        ]
+    }
+
+@app.get("/monitoring/transactions/{transaction_id}", response_class=HTMLResponse)
+async def view_transaction_details(transaction_id: str, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    
+    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    
+    return templates.TemplateResponse("monitoring/transaction_detail.html", {"request": request, "transaction": transaction, "user": current_user})
+
+@app.get("/api/transactions/{transaction_id}")
+async def get_transaction_by_id(transaction_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    
+    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    
+    return {
+        "id": str(transaction.id),
+        "customer_id": transaction.customer_id,
+        "account_number": transaction.account_number,
+        "transaction_type": transaction.transaction_type,
+        "amount": transaction.amount,
+        "currency": transaction.currency,
+        "channel": transaction.channel,
+        "counterparty_account": transaction.counterparty_account,
+        "counterparty_name": transaction.counterparty_name,
+        "counterparty_bank": transaction.counterparty_bank,
+        "reference": transaction.reference,
+        "narrative": transaction.narrative,
+        "processed_by": transaction.processed_by,
+        "status": transaction.status.value if hasattr(transaction.status, 'value') else str(transaction.status),
+        "created_at": transaction.created_at.isoformat(),
+        "risk_score": transaction.risk_score,
+        "ml_prediction": transaction.ml_prediction if hasattr(transaction, 'ml_prediction') else None
+    }
+
+@app.get("/api/monitoring/customers")
+async def api_get_customers(request: Request, db: Session = Depends(get_db),
+                              search_term: Optional[str] = None,
+                              risk_rating: Optional[str] = None):
+    params = request.query_params
+    
+    draw = int(params.get("draw", 1))
+    start = int(params.get("start", 0))
+    length = int(params.get("length", 10))
+    
+    query = db.query(Customer)
+    
+    # Apply filters
+    if search_term:
+        query = query.filter(or_(
+            Customer.full_name.ilike(f"%{search_term}%"),
+            Customer.customer_id.ilike(f"%{search_term}%")
+        ))
+    
+    if risk_rating and risk_rating != "all":
+        query = query.filter(Customer.risk_rating == risk_rating)
+
+    total_records = db.query(Customer).count() # Total records before filtering
+    records_filtered = query.count() # Total records after filtering
+    
+    customers = query.order_by(desc(Customer.account_opening_date)).offset(start).limit(length).all()
+    
+    return {
+        "draw": draw,
+        "recordsTotal": total_records,
+        "recordsFiltered": records_filtered,
+        "data": [
+            {
+                "customer_id": c.customer_id,
+                "full_name": c.full_name,
+                "risk_rating": c.risk_rating.value if hasattr(c.risk_rating, 'value') else str(c.risk_rating),
+                "last_login": c.last_login.isoformat() if c.last_login else None
+            } for c in customers
+        ]
+    }
+
+@app.get("/customers/{customer_id}/profile", response_class=HTMLResponse)
+async def view_customer_profile(customer_id: str, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    
+    customer = db.query(Customer).filter(Customer.customer_id == customer_id).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    
+    return templates.TemplateResponse("monitoring/customer_profile.html", {"request": request, "customer": customer, "user": current_user})
+
 @app.post("/api/admin/backup")
 async def create_backup(current_user: User = Depends(get_current_user_dependency)):
     logger.info(f"System backup triggered by {current_user.username}")
@@ -862,7 +1154,8 @@ async def create_transaction(
         counterparty_bank=transaction.counterparty_bank,
         reference=transaction.reference,
         narrative=transaction.narrative,
-        processed_by=current_user.username
+        processed_by=current_user.username,
+        status=TransactionStatus.PENDING
     )
     
     db.add(db_transaction)
@@ -881,19 +1174,41 @@ async def create_transaction(
 async def process_transaction_controls(transaction_id: str, transaction_data: dict):
     """Background task to process AML controls"""
     db = next(get_db())
+    logger.info(f"[process_transaction_controls] Starting for transaction_id: {transaction_id}")
     
     try:
+        transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+        if not transaction:
+            logger.error(f"[process_transaction_controls] Transaction {transaction_id} not found for processing.")
+            return
+
+        logger.info(f"[process_transaction_controls] Setting status to PROCESSING for {transaction_id}")
+        transaction.status = TransactionStatus.PROCESSING
+        db.commit()
+        db.refresh(transaction)
+        logger.info(f"[process_transaction_controls] Status updated to PROCESSING for {transaction_id}")
+
         # Run all AML controls
+        logger.info(f"[process_transaction_controls] Running AML controls for {transaction_id}")
         control_results = await aml_engine.run_all_controls(transaction_data, db)
+        logger.info(f"[process_transaction_controls] AML controls completed for {transaction_id}")
         
         # Run ML anomaly detection
+        logger.info(f"[process_transaction_controls] Running ML anomaly detection for {transaction_id}")
         anomaly_score = await ml_engine.detect_anomaly(transaction_data, db)
+        transaction.ml_prediction = anomaly_score # Assign ML prediction to transaction
+        logger.info(f"[process_transaction_controls] ML anomaly detection completed for {transaction_id}, score: {anomaly_score}")
         
         # Calculate risk score
+        logger.info(f"[process_transaction_controls] Calculating risk score for {transaction_id}")
         risk_score = await risk_engine.calculate_risk_score(transaction_data, db)
+        transaction.risk_score = risk_score
+        logger.info(f"[process_transaction_controls] Risk score calculated for {transaction_id}: {risk_score}")
         
         # Sanctions screening
+        logger.info(f"[process_transaction_controls] Running sanctions screening for {transaction_id}")
         sanctions_result = await sanctions_engine.screen_transaction(transaction_data, db)
+        logger.info(f"[process_transaction_controls] Sanctions screening completed for {transaction_id}")
         
         # Create alerts if necessary
         alerts_created = []
@@ -934,7 +1249,25 @@ async def process_transaction_controls(transaction_id: str, transaction_data: di
             db.add(alert)
             alerts_created.append(alert)
         
+        if alerts_created:
+            logger.info(f"[process_transaction_controls] Alerts created for {transaction_id}. Setting status to FLAGGED.")
+            transaction.status = TransactionStatus.FLAGGED
+        else:
+            logger.info(f"[process_transaction_controls] No alerts created for {transaction_id}. Setting status to COMPLETED.")
+            transaction.status = TransactionStatus.COMPLETED
+        
         db.commit()
+        db.refresh(transaction)
+        logger.info(f"[process_transaction_controls] Final status updated to {transaction.status} for {transaction_id}")
+
+        # Send real-time update for transaction status
+        await manager.broadcast({
+            "type": "transaction_status_update",
+            "data": {
+                "id": str(transaction.id),
+                "status": transaction.status.value if hasattr(transaction.status, 'value') else str(transaction.status)
+            }
+        })
         
         # Send real-time notifications
         for alert in alerts_created:
@@ -955,14 +1288,34 @@ async def process_transaction_controls(transaction_id: str, transaction_data: di
                 await notification_service.send_alert_email(alert)
     
     except Exception as e:
-        logger.error(f"Error processing transaction controls: {e}")
+        db.rollback()
+        logger.error(f"[process_transaction_controls] Critical error processing transaction {transaction_id}: {e}", exc_info=True)
+        transaction.status = TransactionStatus.FAILED
+        transaction.processing_status = str(e)
+        db.commit()
+        db.refresh(transaction)
+        logger.error(f"[process_transaction_controls] Status updated to FAILED for {transaction_id} due to error.")
+        
+        # Send real-time update for failed transaction status
+        await manager.broadcast({
+            "type": "transaction_status_update",
+            "data": {
+                "id": str(transaction.id),
+                "status": transaction.status.value if hasattr(transaction.status, 'value') else str(transaction.status)
+            }
+        })
     finally:
         db.close()
+        logger.info(f"[process_transaction_controls] Finished for transaction_id: {transaction_id}")
 
 @app.get("/api/alerts/", response_model=List[AlertResponse])
 async def get_alerts(
     status: Optional[str] = None,
     alert_type: Optional[str] = None,
+    time_range: Optional[str] = None,
+    risk_level: Optional[str] = None,
+    start_date: Optional[str] = None, # Added for custom date range
+    end_date: Optional[str] = None,   # Added for custom date range
     limit: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user_from_cookie)
@@ -977,6 +1330,43 @@ async def get_alerts(
     if alert_type:
         query = query.filter(Alert.alert_type == alert_type)
     
+    # Handle time_range and custom date range
+    if time_range:
+        current_time = datetime.now()
+        if time_range == "today":
+            start_date_filter = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_date_filter = current_time
+        elif time_range == "7d":
+            start_date_filter = current_time - timedelta(days=7)
+            end_date_filter = current_time
+        elif time_range == "30d":
+            start_date_filter = current_time - timedelta(days=30)
+            end_date_filter = current_time
+        elif time_range == "90d":
+            start_date_filter = current_time - timedelta(days=90)
+            end_date_filter = current_time
+        else: # Default to 24h if time_range is not recognized
+            start_date_filter = current_time - timedelta(hours=24)
+            end_date_filter = current_time
+        query = query.filter(Alert.created_at.between(start_date_filter, end_date_filter))
+    elif start_date and end_date:
+        try:
+            start_date_filter = datetime.fromisoformat(start_date)
+            end_date_filter = datetime.fromisoformat(end_date)
+            query = query.filter(Alert.created_at.between(start_date_filter, end_date_filter))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format for start_date or end_date. Use ISO format (YYYY-MM-DD).")
+
+    if risk_level:
+        if risk_level == "low":
+            query = query.filter(Alert.risk_score < 0.4)
+        elif risk_level == "medium":
+            query = query.filter(and_(Alert.risk_score >= 0.4, Alert.risk_score < 0.7))
+        elif risk_level == "high":
+            query = query.filter(and_(Alert.risk_score >= 0.7, Alert.risk_score < 0.9))
+        elif risk_level == "critical":
+            query = query.filter(Alert.risk_score >= 0.9)
+
     alerts = query.options(joinedload(Alert.transaction)).order_by(desc(Alert.created_at))
     if limit is not None:
         alerts = alerts.limit(limit)
@@ -1005,15 +1395,38 @@ async def get_alert(alert_id: str, db: Session = Depends(get_db), current_user: 
         raise HTTPException(status_code=404, detail="Alert not found")
     return alert
 
-@app.get("/api/alerts/export")
-async def export_alerts(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+class AlertUpdate(BaseModel):
+    status: Optional[str] = None
+    assigned_to: Optional[str] = None
+    priority: Optional[str] = None
+    resolution_notes: Optional[str] = None
+
+@app.put("/api/alerts/{alert_id}")
+async def update_alert(
+    alert_id: str,
+    alert_update: AlertUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_from_cookie)
+):
     if isinstance(current_user, RedirectResponse):
         return current_user
-    alerts = db.query(Alert).all()
-    output = "alert_id,alert_type,risk_score,status,created_at,transaction_id,customer_id,description\n"
-    for alert in alerts:
-        output += f'{alert.id},{alert.alert_type},{alert.risk_score},{alert.status},{alert.created_at},{alert.transaction_id},{alert.transaction.customer_id if alert.transaction else ""},{alert.description}\n'
-    return Response(content=output, media_type="text/csv")
+    alert = db.query(Alert).filter(Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    if alert_update.status:
+        alert.status = alert_update.status
+    if alert_update.assigned_to:
+        alert.assigned_to = alert_update.assigned_to
+    if alert_update.priority:
+        alert.priority = alert_update.priority
+    if alert_update.resolution_notes:
+        alert.resolution_notes = alert_update.resolution_notes
+
+    db.add(alert)
+    db.commit()
+    db.refresh(alert)
+    return {"message": "Alert updated successfully", "alert_id": alert.id}
 
 @app.get("/api/alerts/metrics")
 async def get_alerts_metrics(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
@@ -1036,6 +1449,30 @@ async def get_alerts_metrics(db: Session = Depends(get_db), current_user: User =
         "avg_response_time": avg_response_time_minutes / 60, # Convert to hours
         "false_positive_rate": false_positive_rate
     }
+
+@app.get("/api/alerts/export")
+async def export_alerts(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    
+    output = "alert_id,alert_type,risk_score,status,created_at,transaction_id,customer_id,description\n"
+    
+    try:
+        alerts = db.query(Alert).options(joinedload(Alert.transaction)).all() # Eager load transaction
+        for alert in alerts:
+            customer_id = alert.transaction.customer_id if alert.transaction else ""
+            transaction_id = alert.transaction_id if alert.transaction_id else ""
+            
+            # Sanitize description to prevent CSV breaking
+            description = alert.description.replace(",", ";").replace("\n", " ").replace("\r", "")
+            
+            output += f'{alert.id},{alert.alert_type},{alert.risk_score},{alert.status},{alert.created_at},{transaction_id},{customer_id},{description}\n'
+        
+        return Response(content=output, media_type="text/csv")
+    except Exception as e:
+        # Re-raise as HTTPException to send a proper error response to the frontend
+        raise HTTPException(status_code=500, detail=f"Failed to export alerts due to an internal server error: {e}")
+
 
 @app.post("/api/alerts/bulk")
 async def bulk_alert_action(
@@ -1119,15 +1556,29 @@ async def get_dashboard_stats(db: Session = Depends(get_db), current_user: User 
     if isinstance(current_user, RedirectResponse):
         return current_user
     """Get dashboard statistics"""
+    today = datetime.now().date()
+    yesterday = today - timedelta(days=1)
+
     # Transaction stats
     total_transactions = db.query(Transaction).count()
-    
+    today_transactions = db.query(Transaction).filter(func.date(Transaction.created_at) == today).count()
+    yesterday_transactions = db.query(Transaction).filter(func.date(Transaction.created_at) == yesterday).count()
+    transactions_change = ((today_transactions - yesterday_transactions) / yesterday_transactions * 100) if yesterday_transactions > 0 else 0
+
     # Alert stats
     open_alerts = db.query(Alert).filter(Alert.status == "OPEN").count()
     high_risk_alerts = db.query(Alert).filter(
         and_(Alert.status == "OPEN", Alert.risk_score >= 0.8)
     ).count()
-    
+    today_alerts = db.query(Alert).filter(func.date(Alert.created_at) == today).count()
+    yesterday_alerts = db.query(Alert).filter(func.date(Alert.created_at) == yesterday).count()
+    alerts_change = ((today_alerts - yesterday_alerts) / yesterday_alerts * 100) if yesterday_alerts > 0 else 0
+
+    # Case stats
+    cases_opened_today = db.query(Case).filter(func.date(Case.created_at) == today).count()
+    cases_opened_yesterday = db.query(Case).filter(func.date(Case.created_at) == yesterday).count()
+    cases_change = ((cases_opened_today - cases_opened_yesterday) / cases_opened_yesterday * 100) if cases_opened_yesterday > 0 else 0
+
     # Risk distribution
     risk_distribution = db.query(
         Alert.alert_type,
@@ -1138,10 +1589,15 @@ async def get_dashboard_stats(db: Session = Depends(get_db), current_user: User 
     # Alert Trends
     alert_trends = db.query(func.date(Alert.created_at), func.sum(case((Alert.risk_score >= 0.8, 1), else_=0)), func.sum(case((Alert.risk_score >= 0.6, 1), else_=0))).group_by(func.date(Alert.created_at)).order_by(func.date(Alert.created_at)).all()
 
-    return {
+    response_data = {
         "total_transactions": total_transactions,
+        "today_transactions": today_transactions,
+        "transactions_change": round(transactions_change, 2),
         "open_alerts": open_alerts,
         "high_risk_alerts": high_risk_alerts,
+        "alerts_change": round(alerts_change, 2),
+        "cases_opened_today": cases_opened_today,
+        "cases_change": round(cases_change, 2),
         "risk_distribution": [
             {
                 "type": item.alert_type,
@@ -1156,6 +1612,8 @@ async def get_dashboard_stats(db: Session = Depends(get_db), current_user: User 
             "medium_risk": [row[2] for row in alert_trends]
         }
     }
+    logger.info(f"Dashboard stats: {response_data}")
+    return response_data
 
 
 
@@ -1468,22 +1926,27 @@ async def get_customer_profile(customer_id: str, db: Session = Depends(get_db), 
     return {
         "customer_id": customer.customer_id,
         "full_name": customer.full_name,
-        "risk_rating": customer.risk_rating,
+        "risk_rating": customer.risk_rating.value if hasattr(customer.risk_rating, 'value') else str(customer.risk_rating),
+        "email": customer.email,
         "account_opening_date": customer.account_opening_date.isoformat(),
+        "last_activity": customer.last_login.isoformat() if customer.last_login else None,
+        "is_pep": customer.is_pep,
+        "last_review_date": customer.last_review_date.isoformat() if customer.last_review_date else None,
         "transaction_count": len(transactions),
         "total_volume": total_volume,
         "average_transaction": avg_transaction,
         "recent_alerts": len(customer_alerts),
         "transactions": [
             {
-                "id": t.id,
+                "id": str(t.id),
                 "amount": t.amount,
                 "currency": t.currency,
-                "type": t.transaction_type,
+                "transaction_type": t.transaction_type,
                 "channel": t.channel,
-                "created_at": t.created_at.isoformat()
+                "created_at": t.created_at.isoformat(),
+                "status": t.status.value if hasattr(t.status, 'value') else str(t.status)
             }
-            for t in transactions[:10]  # Latest 10 for display
+            for t in transactions  # All transactions for display
         ]
     }
 
@@ -1541,7 +2004,7 @@ async def register_customer(
     return RedirectResponse(url="/portal/login", status_code=302)
 
 @app.post("/api/customer/token")
-async def login_for_access_token_customer(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+async def login_for_access_token_customer(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     customer = db.query(Customer).filter(Customer.username == form_data.username).first()
     if not customer or not verify_password(form_data.password, customer.hashed_password):
         raise HTTPException(
@@ -1549,10 +2012,25 @@ async def login_for_access_token_customer(response: Response, form_data: OAuth2P
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
+    # Update last_login timestamp
+    try:
+        customer.last_login = datetime.utcnow()
+        db.add(customer)
+        db.commit()
+        db.refresh(customer)
+        logger.info(f"Customer {customer.username} last_login updated to {customer.last_login}")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error updating last_login for customer {customer.username}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error during login")
+
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": customer.username}, expires_delta=access_token_expires
     )
+    
+    response = RedirectResponse(url="/portal/dashboard", status_code=302)
     response.set_cookie(
         key="customer_token",
         value=access_token,
@@ -1560,10 +2038,17 @@ async def login_for_access_token_customer(response: Response, form_data: OAuth2P
         max_age=access_token_expires.total_seconds(),
         expires=access_token_expires.total_seconds(),
         samesite="Lax", # or "Strict"
-        secure=False # Set to True in production with HTTPS
+        secure=False, # Set to True in production with HTTPS
+        path="/" # Ensure cookie is available across the entire domain
     )
     logger.info(f"Customer token cookie set for user: {customer.username}")
-    return RedirectResponse(url="/portal/dashboard", status_code=302)
+    return response
+
+@app.post("/api/customer/logout")
+async def customer_logout(response: Response):
+    response.delete_cookie(key="customer_token")
+    logger.info("Customer token cookie deleted.")
+    return {"message": "Logged out successfully"}
 
 
 
@@ -1578,7 +2063,7 @@ async def read_customer_me(current_customer: Customer = Depends(get_current_cust
 
 @app.get("/api/customer/me/transactions")
 async def read_customer_transactions(current_customer: Customer = Depends(get_current_customer), db: Session = Depends(get_db)):
-    transactions = db.query(Transaction).filter(Transaction.customer_id == current_customer.customer_id).order_by(desc(Transaction.created_at)).limit(50).all()
+    transactions = db.query(Transaction).filter(Transaction.customer_id == current_customer.customer_id, Transaction.status.in_([TransactionStatus.COMPLETED, TransactionStatus.FLAGGED])).order_by(desc(Transaction.created_at)).limit(50).all()
     return transactions
 
 @app.post("/api/customer/me/transactions")
@@ -1614,7 +2099,8 @@ async def create_customer_transaction(
         counterparty_bank=transaction.counterparty_bank,
         reference=transaction.reference,
         narrative=transaction.narrative,
-        processed_by=fake_current_user["user_id"]
+        processed_by=fake_current_user["user_id"],
+        status=TransactionStatus.PENDING
     )
 
     db.add(db_transaction)
@@ -1639,6 +2125,13 @@ class PaymentRequest(BaseModel):
     payee_account: Optional[str] = None
     payee_name: Optional[str] = None
     payee_bank: Optional[str] = None
+
+class TransferRequest(BaseModel):
+    source_account_number: str
+    destination_account_number: str
+    amount: float
+    currency: str
+    reference: str
 
 @app.post("/api/customer/make_payment")
 async def make_customer_payment(
@@ -1697,7 +2190,8 @@ async def make_customer_payment(
         counterparty_bank=transaction_data.counterparty_bank,
         reference=transaction_data.reference,
         narrative=transaction_data.narrative,
-        processed_by=f"customer:{current_customer.username}"
+        processed_by=f"customer:{current_customer.username}",
+        status=TransactionStatus.PENDING
     )
 
     db.add(db_transaction)
@@ -1711,3 +2205,127 @@ async def make_customer_payment(
     )
 
     return {"message": "Payment processed successfully", "transaction_id": db_transaction.id}
+
+@app.post("/api/customer/make_transfer")
+async def make_customer_transfer(
+    transfer_request: TransferRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_customer: Customer = Depends(get_current_customer)
+):
+    if current_customer is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    # Validate source account belongs to the customer
+    source_account = db.query(Account).filter(
+        Account.account_number == transfer_request.source_account_number,
+        Account.customer_id == current_customer.customer_id
+    ).first()
+
+    if not source_account:
+        raise HTTPException(status_code=400, detail="Invalid source account or account does not belong to you")
+
+    # Validate destination account belongs to the customer
+    destination_account = db.query(Account).filter(
+        Account.account_number == transfer_request.destination_account_number,
+        Account.customer_id == current_customer.customer_id
+    ).first()
+
+    if not destination_account:
+        raise HTTPException(status_code=400, detail="Invalid destination account or account does not belong to you")
+
+    if source_account.balance < transfer_request.amount:
+        raise HTTPException(status_code=400, detail="Insufficient funds")
+
+    # Perform the transfer
+    source_account.balance -= transfer_request.amount
+    destination_account.balance += transfer_request.amount
+    db.add(source_account)
+    db.add(destination_account)
+    db.commit()
+    db.refresh(source_account)
+    db.refresh(destination_account)
+
+    # Create a debit transaction
+    debit_transaction_data = TransactionCreate(
+        customer_id=current_customer.customer_id,
+        account_number=transfer_request.source_account_number,
+        transaction_type="DEBIT",
+        amount=transfer_request.amount,
+        currency=transfer_request.currency,
+        channel="INTERNAL_TRANSFER",
+        counterparty_account=transfer_request.destination_account_number,
+        counterparty_name=current_customer.full_name,
+        counterparty_bank="SAME",
+        reference=transfer_request.reference,
+        narrative=f"Transfer to {transfer_request.destination_account_number}"
+    )
+
+    db_debit_transaction = Transaction(
+        customer_id=debit_transaction_data.customer_id,
+        account_number=debit_transaction_data.account_number,
+        transaction_type=debit_transaction_data.transaction_type,
+        amount=debit_transaction_data.amount,
+        base_amount=await currency_service.convert_to_base(debit_transaction_data.amount, debit_transaction_data.currency),
+        currency=debit_transaction_data.currency,
+        channel=debit_transaction_data.channel,
+        counterparty_account=debit_transaction_data.counterparty_account,
+        counterparty_name=debit_transaction_data.counterparty_name,
+        counterparty_bank=debit_transaction_data.counterparty_bank,
+        reference=debit_transaction_data.reference,
+        narrative=debit_transaction_data.narrative,
+        processed_by=f"customer:{current_customer.username}",
+        status=TransactionStatus.PENDING
+    )
+    db.add(db_debit_transaction)
+    db.commit()
+    db.refresh(db_debit_transaction)
+
+    background_tasks.add_task(
+        process_transaction_controls,
+        db_debit_transaction.id,
+        debit_transaction_data.dict()
+    )
+
+    # Create a credit transaction
+    credit_transaction_data = TransactionCreate(
+        customer_id=current_customer.customer_id,
+        account_number=transfer_request.destination_account_number,
+        transaction_type="CREDIT",
+        amount=transfer_request.amount,
+        currency=transfer_request.currency,
+        channel="INTERNAL_TRANSFER",
+        counterparty_account=transfer_request.source_account_number,
+        counterparty_name=current_customer.full_name,
+        counterparty_bank="SAME",
+        reference=transfer_request.reference,
+        narrative=f"Transfer from {transfer_request.source_account_number}"
+    )
+
+    db_credit_transaction = Transaction(
+        customer_id=credit_transaction_data.customer_id,
+        account_number=credit_transaction_data.account_number,
+        transaction_type=credit_transaction_data.transaction_type,
+        amount=credit_transaction_data.amount,
+        base_amount=await currency_service.convert_to_base(credit_transaction_data.amount, credit_transaction_data.currency),
+        currency=credit_transaction_data.currency,
+        channel=credit_transaction_data.channel,
+        counterparty_account=credit_transaction_data.counterparty_account,
+        counterparty_name=credit_transaction_data.counterparty_name,
+        counterparty_bank=credit_transaction_data.counterparty_bank,
+        reference=credit_transaction_data.reference,
+        narrative=credit_transaction_data.narrative,
+        processed_by=f"customer:{current_customer.username}",
+        status=TransactionStatus.PENDING
+    )
+    db.add(db_credit_transaction)
+    db.commit()
+    db.refresh(db_credit_transaction)
+
+    background_tasks.add_task(
+        process_transaction_controls,
+        db_credit_transaction.id,
+        credit_transaction_data.dict()
+    )
+
+    return {"message": "Transfer processed successfully", "transaction_id": db_debit_transaction.id}

@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Profile{% endblock %}
+
+{% block page_title %}Admin Profile{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-lg-8 offset-lg-2">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    <h4 class="mb-0">Your Profile Information</h4>
+                </div>
+                <div class="card-body">
+                    <p><strong>Username:</strong> {{ user.username }}</p>
+                    <p><strong>Full Name:</strong> {{ user.full_name }}</p>
+                    <p><strong>Email:</strong> {{ user.email }}</p>
+                    <p><strong>Role:</strong> <span class="badge bg-info">{{ user.role }}</span></p>
+                    <p><strong>Account Created:</strong> {{ user.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                    <p><strong>Last Updated:</strong> {{ user.updated_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                    
+                    <hr>
+                    <h5>Change Password</h5>
+                    <form id="changePasswordForm">
+                        <div class="mb-3">
+                            <label for="currentPassword" class="form-label">Current Password</label>
+                            <input type="password" class="form-control" id="currentPassword" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="newPassword" class="form-label">New Password</label>
+                            <input type="password" class="form-control" id="newPassword" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="confirmNewPassword" class="form-label">Confirm New Password</label>
+                            <input type="password" class="form-control" id="confirmNewPassword" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Update Password</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const changePasswordForm = document.getElementById('changePasswordForm');
+        if (changePasswordForm) {
+            changePasswordForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const currentPassword = document.getElementById('currentPassword').value;
+                const newPassword = document.getElementById('newPassword').value;
+                const confirmNewPassword = document.getElementById('confirmNewPassword').value;
+
+                if (newPassword !== confirmNewPassword) {
+                    alert('New password and confirm new password do not match.');
+                    return;
+                }
+
+                try {
+                    // This would be an API call to update the user's password
+                    // For demonstration, we'll just log and show an alert
+                    console.log('Attempting to change password...');
+                    console.log('Current:', currentPassword, 'New:', newPassword);
+                    
+                    // In a real application, you'd send a request to /api/admin/users/{user_id} with the new hashed password
+                    // Example (conceptual, not implemented in backend yet):
+                    // const response = await fetch('/api/admin/me/password', {
+                    //     method: 'PUT',
+                    //     headers: {
+                    //         'Content-Type': 'application/json',
+                    //         'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
+                    //     },
+                    //     body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
+                    // });
+                    // if (response.ok) {
+                    //     alert('Password updated successfully!');
+                    // } else {
+                    //     const errorData = await response.json();
+                    //     alert('Failed to update password: ' + (errorData.detail || 'Unknown error'));
+                    // }
+
+                    alert('Password change functionality is for demonstration. Backend API not implemented.');
+                    changePasswordForm.reset();
+
+                } catch (error) {
+                    console.error('Error changing password:', error);
+                    alert('An error occurred while trying to change password.');
+                }
+            });
+        }
+    });
+</script>
+{% endblock %}

@@ -583,16 +583,8 @@ class RealTimeMonitor {
      * Play alert sound
      */
     playAlertSound() {
-        try {
-            const audio = new Audio('/static/sounds/alert.mp3');
-            audio.volume = 0.5;
-            audio.play().catch(() => {
-                // Fallback to system beep
-                console.log('\u0007'); // ASCII bell character
-            });
-        } catch (error) {
-            console.log('Could not play alert sound');
-        }
+        // Fallback to system beep
+        console.log('\u0007'); // ASCII bell character
     }
     
     /**
@@ -642,6 +634,426 @@ class RealTimeMonitor {
     }
     
     /**
+     * Initialize transaction volume chart
+     */
+    async initVolumeChart() {
+        const ctx = document.getElementById('transactionVolumeChart');
+        if (!ctx) return;
+
+        this.charts.transactionVolume = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Transaction Volume (USD)',
+                    data: [],
+                    backgroundColor: 'rgba(75, 192, 192, 0.6)',
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        type: 'time',
+                        time: {
+                            unit: 'hour',
+                            displayFormats: {
+                                hour: 'HH:mm'
+                            }
+                        },
+                        title: {
+                            display: true,
+                            text: 'Time'
+                        }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: 'Volume (USD)'
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        position: 'top'
+                    }
+                }
+            }
+        });
+    }
+
+    /**
+     * Initialize alert trends chart
+     */
+    async initAlertTrendsChart() {
+        const ctx = document.getElementById('alertTrendsChart');
+        if (!ctx) return;
+
+        this.charts.alertTrends = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Total Alerts',
+                    data: [],
+                    borderColor: '#007bff',
+                    backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                    tension: 0.4,
+                    fill: true
+                }, {
+                    label: 'High Risk Alerts',
+                    data: [],
+                    borderColor: '#dc3545',
+                    backgroundColor: 'rgba(220, 53, 69, 0.1)',
+                    tension: 0.4,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        type: 'time',
+                        time: {
+                            unit: 'hour',
+                            displayFormats: {
+                                hour: 'HH:mm'
+                            }
+                        },
+                        title: {
+                            display: true,
+                            text: 'Time'
+                        }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: 'Number of Alerts'
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        position: 'top'
+                    }
+                }
+            }
+        });
+    }
+
+    /**
+     * Update transaction volume chart
+     */
+    updateVolumeChart() {
+        if (!this.charts.transactionVolume) return;
+
+        const chart = this.charts.transactionVolume;
+        const now = new Date();
+
+        // Aggregate volume for the last minute
+        const recentTransactions = this.monitoringData.transactions.filter(
+            t => new Date(t.timestamp) > new Date(now.getTime() - 60000)
+        );
+        const volume = recentTransactions.reduce((sum, t) => sum + t.amount, 0);
+
+        // Add data point
+        chart.data.labels.push(now);
+        chart.data.datasets[0].data.push(volume);
+
+        // Keep only last 20 data points
+        if (chart.data.labels.length > 20) {
+            chart.data.labels = chart.data.labels.slice(-20);
+            chart.data.datasets[0].data = chart.data.datasets[0].data.slice(-20);
+        }
+
+        chart.update('none');
+    }
+
+    /**
+     * Update alert trends chart
+     */
+    updateAlertTrendsChart() {
+        if (!this.charts.alertTrends) return;
+
+        const chart = this.charts.alertTrends;
+        const now = new Date();
+
+        // Aggregate alerts for the last minute
+        const recentAlerts = this.monitoringData.alerts.filter(
+            a => new Date(a.timestamp) > new Date(now.getTime() - 60000)
+        );
+        const highRiskAlerts = recentAlerts.filter(a => a.risk_score >= 0.8);
+
+        // Add data point
+        chart.data.labels.push(now);
+        chart.data.datasets[0].data.push(recentAlerts.length);
+        chart.data.datasets[1].data.push(highRiskAlerts.length);
+
+        // Keep only last 20 data points
+        if (chart.data.labels.length > 20) {
+            chart.data.labels = chart.data.labels.slice(-20);
+            chart.data.datasets[0].data = chart.data.datasets[0].data.slice(-20);
+            chart.data.datasets[1].data = chart.data.datasets[1].data.slice(-20);
+        }
+
+        chart.update('none');
+    }
+
+    /**
+     * Update risk distribution chart
+     */
+    updateRiskDistributionChart() {
+        if (!this.charts.riskDistribution) return;
+
+        const chart = this.charts.riskDistribution;
+        const riskCounts = { low: 0, medium: 0, high: 0, critical: 0 };
+
+        this.monitoringData.alerts.forEach(alert => {
+            const riskLevel = this.getRiskLevel(alert.risk_score);
+            riskCounts[riskLevel]++;
+        });
+
+        chart.data.datasets[0].data = [
+            riskCounts.low,
+            riskCounts.medium,
+            riskCounts.high,
+            riskCounts.critical
+        ];
+        chart.update('none');
+    }
+
+    /**
+     * Update alert display
+     */
+    updateAlertDisplay(alert) {
+        const alertListContainer = document.getElementById('alertList'); // Assuming an alert list container
+        if (!alertListContainer) return;
+
+        const alertElement = document.createElement('div');
+        alertElement.className = `alert-item risk-${this.getRiskLevel(alert.risk_score)}`;
+        alertElement.innerHTML = `
+            <div class="alert-header">
+                <strong>${alert.alert_type}</strong> - Risk: ${(alert.risk_score * 100).toFixed(0)}%
+                <span class="alert-time">${new Date(alert.timestamp).toLocaleTimeString()}</span>
+            </div>
+            <div class="alert-body">
+                <p>${alert.description}</p>
+                <p>Customer: ${this.maskCustomerId(alert.customer_id)}</p>
+            </div>
+            <div class="alert-actions">
+                <button class="btn btn-sm btn-outline-secondary acknowledge-alert-btn" data-alert-id="${alert.id}">Acknowledge</button>
+                <button class="btn btn-sm btn-primary investigate-alert-btn" data-alert-id="${alert.id}">Investigate</button>
+            </div>
+        `;
+
+        alertListContainer.insertBefore(alertElement, alertListContainer.firstChild);
+
+        // Keep only a certain number of alerts in the display
+        const items = alertListContainer.children;
+        if (items.length > 10) { // Example: keep last 10 alerts
+            for (let i = 10; i < items.length; i++) {
+                alertListContainer.removeChild(items[i]);
+            }
+        }
+    }
+
+    /**
+     * Update ML metrics display
+     */
+    updateMLMetrics(prediction) {
+        const mlMetricsContainer = document.getElementById('mlMetrics'); // Assuming a container for ML metrics
+        if (!mlMetricsContainer) return;
+
+        // Example: Update a simple text display
+        mlMetricsContainer.innerHTML = `
+            <p>Latest ML Prediction: ${prediction.prediction} (Confidence: ${(prediction.confidence * 100).toFixed(1)}%)</p>
+            <p>Transaction ID: ${prediction.transaction_id}</p>
+        `;
+    }
+
+    /**
+     * Update system metrics display
+     */
+    updateSystemMetricsDisplay(metrics) {
+        const systemMetricsContainer = document.getElementById('systemMetrics'); // Assuming a container for system metrics
+        if (!systemMetricsContainer) return;
+
+        systemMetricsContainer.innerHTML = `
+            <p>CPU Usage: ${metrics.cpu_usage}%</p>
+            <p>Memory Usage: ${metrics.memory_usage}%</p>
+            <p>Active Connections: ${metrics.active_connections}</p>
+        `;
+    }
+
+    /**
+     * Handle risk score update (if needed for specific UI elements)
+     */
+    handleRiskScoreUpdate(data) {
+        console.log('Risk score update:', data);
+        // Potentially update a specific transaction's displayed risk score
+    }
+
+    /**
+     * Toggle monitoring (pause/resume)
+     */
+    toggleMonitoring() {
+        const pauseBtn = document.getElementById('pauseMonitoring');
+        if (!pauseBtn) return;
+
+        if (this.isConnected) {
+            this.websocket.close();
+            pauseBtn.innerHTML = '<i class="fas fa-play"></i> Resume';
+            pauseBtn.classList.remove('btn-outline-secondary');
+            pauseBtn.classList.add('btn-success');
+        } else {
+            this.setupWebSocket();
+            pauseBtn.innerHTML = '<i class="fas fa-pause"></i> Pause';
+            pauseBtn.classList.remove('btn-success');
+            pauseBtn.classList.add('btn-outline-secondary');
+        }
+    }
+
+    /**
+     * Clear transaction stream display
+     */
+    clearTransactionStream() {
+        const streamContainer = document.getElementById('transactionStream');
+        if (streamContainer) {
+            streamContainer.innerHTML = '<p class="text-muted text-center mt-3">Waiting for real-time transactions...</p>';
+            this.monitoringData.transactions = [];
+            this.monitoringData.alerts = []; // Clear alerts too for a fresh start
+            this.updateTransactionFlowChart(); // Reset charts
+            this.updateVolumeChart();
+            this.updateRiskDistributionChart();
+            this.updateAlertTrendsChart();
+        }
+    }
+
+    /**
+     * Export real-time data
+     */
+    exportRealTimeData() {
+        const dataToExport = {
+            transactions: this.monitoringData.transactions,
+            alerts: this.monitoringData.alerts,
+            systemMetrics: this.monitoringData.systemMetrics
+        };
+        const jsonString = JSON.stringify(dataToExport, null, 2);
+        const blob = new Blob([jsonString], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `real-time-data-${new Date().toISOString()}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        console.log('Real-time data exported.');
+    }
+
+    /**
+     * Acknowledge an alert (client-side only for now)
+     */
+    acknowledgeAlert(alertId) {
+        console.log(`Alert ${alertId} acknowledged.`);
+        // In a real app, this would send an API call to update alert status in DB
+        const alertElement = document.querySelector(`.alert-notification [data-alert-id="${alertId}"]`).closest('.alert-notification');
+        if (alertElement) {
+            alertElement.remove();
+        }
+    }
+
+    /**
+     * Start investigation for an alert (client-side only for now)
+     */
+    startInvestigation(alertId) {
+        console.log(`Investigation started for alert ${alertId}.`);
+        // In a real app, this would send an API call to create a case or update alert status
+        const alertElement = document.querySelector(`.alert-notification [data-alert-id="${alertId}"]`).closest('.alert-notification');
+        if (alertElement) {
+            alertElement.remove();
+        }
+        // Redirect to case management or alert details page
+        window.location.href = `/cases?alert_id=${alertId}`;
+    }
+
+    /**
+     * Check if alert matches current filters
+     */
+    matchesAlertFilter(alert) {
+        // Risk level filter
+        if (this.filters.riskLevel !== 'all') {
+            const riskLevel = this.getRiskLevel(alert.risk_score);
+            if (riskLevel !== this.filters.riskLevel) return false;
+        }
+
+        // Alert type filter
+        if (this.filters.alertType !== 'all') {
+            // Assuming alert.alert_type contains values like 'AML_SUSPICIOUS_ACTIVITY', 'ML_ANOMALY', 'SANCTIONS_HIT'
+            // Need to map these to 'fraud', 'aml', 'sanction'
+            let matchesType = false;
+            if (this.filters.alertType === 'fraud' && alert.alert_type.includes('FRAUD')) {
+                matchesType = true;
+            } else if (this.filters.alertType === 'aml' && alert.alert_type.includes('AML')) {
+                matchesType = true;
+            } else if (this.filters.alertType === 'sanction' && alert.alert_type.includes('SANCTIONS')) {
+                matchesType = true;
+            }
+            if (!matchesType) return false;
+        }
+
+        // Time range filter (same as transaction filter)
+        const now = new Date();
+        const alertTime = new Date(alert.timestamp);
+        const timeDiff = now.getTime() - alertTime.getTime();
+
+        switch (this.filters.timeRange) {
+            case '1h':
+                if (timeDiff > 3600000) return false; // 1 hour
+                break;
+            case '4h':
+                if (timeDiff > 14400000) return false; // 4 hours
+                break;
+            case '24h':
+                if (timeDiff > 86400000) return false; // 24 hours
+                break;
+        }
+
+        return true;
+    }
+
+    /**
+     * Update filtered display (for both transactions and alerts)
+     */
+    updateFilteredDisplay(filteredTransactions, filteredAlerts) {
+        // This function would typically re-render the transaction stream and alert list
+        // For simplicity, we'll just re-render the transaction stream here.
+        // A more robust solution would involve separate rendering functions for each.
+
+        const streamContainer = document.getElementById('transactionStream');
+        if (streamContainer) {
+            streamContainer.innerHTML = ''; // Clear current display
+            if (filteredTransactions.length === 0) {
+                streamContainer.innerHTML = '<p class="text-muted text-center mt-3">No transactions match the current filters.</p>';
+            } else {
+                filteredTransactions.forEach(transaction => {
+                    this.updateTransactionStreamDisplay(transaction); // Re-use existing display logic
+                });
+            }
+        }
+
+        // You would need a similar logic for alerts if they are displayed in a separate filterable list
+        // e.g., const alertListContainer = document.getElementById('alertList');
+        // if (alertListContainer) { ... }
+    }
+
+    /**
      * Load initial data
      */
     async loadInitialData() {
@@ -663,6 +1075,7 @@ class RealTimeMonitor {
             // Initial chart updates
             this.updateRiskDistributionChart();
             this.updateAlertTrendsChart();
+            this.updateVolumeChart(); // Ensure volume chart is updated on initial load
             
         } catch (error) {
             console.error('Error loading initial data:', error);

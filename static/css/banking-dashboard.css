@@ -792,3 +792,8 @@ h6 { font-size: 1rem; }
     outline: 2px solid var(--secondary-blue);
     outline-offset: 2px;
 }
+
+.main-content.full-width {
+    margin-left: 0;
+    width: 100%;
+}

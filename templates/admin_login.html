@@ -38,13 +38,9 @@
                 });
 
                 if (response.ok) {
-                    const data = await response.json();
-                    // Set cookie that expires in 1 day
-                    const d = new Date();
-                    d.setTime(d.getTime() + (1*24*60*60*1000));
-                    let expires = "expires="+ d.toUTCString();
-                    document.cookie = "admin_token=" + data.access_token + ";" + expires + ";path=/";
-                    window.location.href = '/';
+                    const responseData = await response.json();
+                    localStorage.setItem('admin_token', responseData.access_token);
+                    window.location.href = '/admin';
                 } else {
                     const errorData = await response.json();
                     errorMessage.textContent = errorData.detail || 'Login failed. Please check your credentials.';

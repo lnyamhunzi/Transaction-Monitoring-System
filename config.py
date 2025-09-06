@@ -26,7 +26,7 @@ class Settings:
     # Application Settings
     APP_NAME: str = "Banking AML Transaction Monitoring System"
     APP_VERSION: str = "1.0.0"
-    DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
+    DEBUG: bool = True
     APP_SECRET_KEY: str = os.getenv("SECRET_KEY", "aml-system-secret-key-change-in-production")
     
     # Server Configuration
@@ -36,7 +36,7 @@ class Settings:
     # Security Settings
     SECRET_KEY: str = os.getenv("SECRET_KEY", "a-very-secret-key-that-should-be-in-env-file")
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 # Increased to 60 minutes (1 hour)
     
     # Email Configuration
     SMTP_SERVER: str = os.getenv("SMTP_SERVER", "smtp.gmail.com")

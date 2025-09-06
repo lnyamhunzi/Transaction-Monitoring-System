@@ -381,6 +381,7 @@
 
 {% block extra_scripts %}
 <script>
+
 /**
  * Case Management JavaScript
  */
@@ -391,8 +392,8 @@ class CaseManagement {
         this.init();
     }
 
-    async getAuthHeaders() {
-        const token = await getAuthToken();
+    getAuthHeaders() {
+        const token = localStorage.getItem('admin_token');
         if (!token) {
             window.location.href = '/admin/login';
             return null;
@@ -406,7 +407,7 @@ class CaseManagement {
     async init() {
         this.setupDataTable();
         this.setupEventListeners();
-        const headers = await this.getAuthHeaders();
+        const headers = this.getAuthHeaders();
         if (!headers) {
             return;
         }
@@ -643,9 +644,9 @@ class CaseManagement {
         
         try {
             const formData = new FormData(e.target);
-            const caseData = Object.fromEntries(formData);
+            const caseData = Object.fromEntries(formData.entries());
 
-            const headers = await this.getAuthHeaders();
+            const headers = this.getAuthHeaders();
             if (!headers) return;
 
             const response = await fetch('/api/cases/', {
@@ -845,6 +846,7 @@ document.addEventListener('DOMContentLoaded', () => {
     display: flex;
     align-items: center;
     gap: 1rem;
+    padding-left: 60px; /* Added padding to make space for icon */
 }
 
 .step-icon {
@@ -856,6 +858,11 @@ document.addEventListener('DOMContentLoaded', () => {
     justify-content: center;
     color: white;
     font-size: 1.2rem;
+    flex-shrink: 0; /* Prevent icon from shrinking */
+}
+
+.step-content {
+    flex-grow: 1; /* Allow content to take available space */
 }
 
 .step-open { background-color: #17a2b8; }

@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 
-{% block title %}Make a Payment{% endblock %}
+{% block title %}Transfer Funds{% endblock %}
 
-{% block page_title %}Make a Payment{% endblock %}
+{% block page_title %}Transfer Funds{% endblock %}
 
 {% block content %}
 <div class="container mt-5">
@@ -10,13 +10,20 @@
         <div class="col-md-8">
             <div class="card">
                 <div class="card-header">
-                    <h3 class="card-title text-center">New Payment</h3>
+                    <h3 class="card-title text-center">New Transfer</h3>
                 </div>
                 <div class="card-body">
-                    <form id="paymentForm">
+                    <form id="transferForm">
                         <div class="mb-3">
-                            <label for="source_account_number" class="form-label">Your Account Number</label>
+                            <label for="source_account_number" class="form-label">From Account</label>
                             <select class="form-control" id="source_account_number" name="source_account_number" required>
+                                <!-- Options will be loaded dynamically by JavaScript -->
+                                <option value="">Loading accounts...</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="destination_account_number" class="form-label">To Account</label>
+                            <select class="form-control" id="destination_account_number" name="destination_account_number" required>
                                 <!-- Options will be loaded dynamically by JavaScript -->
                                 <option value="">Loading accounts...</option>
                             </select>
@@ -36,22 +43,10 @@
                             </select>
                         </div>
                         <div class="mb-3">
-                            <label for="payee_name" class="form-label">Payee Name</label>
-                            <input type="text" class="form-control" id="payee_name" name="payee_name" required>
-                        </div>
-                        <div class="mb-3">
-                            <label for="payee_account" class="form-label">Payee Account Number</label>
-                            <input type="text" class="form-control" id="payee_account" name="payee_account" required>
-                        </div>
-                        <div class="mb-3">
-                            <label for="payee_bank" class="form-label">Payee Bank (Optional)</label>
-                            <input type="text" class="form-control" id="payee_bank" name="payee_bank">
-                        </div>
-                        <div class="mb-3">
                             <label for="reference" class="form-label">Reference/Description</label>
                             <input type="text" class="form-control" id="reference" name="reference" required>
                         </div>
-                        <button type="submit" class="btn btn-primary w-100">Submit Payment</button>
+                        <button type="submit" class="btn btn-primary w-100">Submit Transfer</button>
                     </form>
                 </div>
             </div>
@@ -61,5 +56,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="/static/js/customer-payment.js"></script>
+<script src="/static/js/customer-transfer.js"></script>
 {% endblock %}

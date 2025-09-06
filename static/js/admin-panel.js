@@ -14,10 +14,14 @@ class AMLAdminPanel {
     }
 
     getAuthHeaders() {
-        const token = localStorage.getItem('admin_token');
+        const token = getAuthToken(); // Use the global getAuthToken from utils.js
+        if (!token) {
+            window.location.href = '/admin/login';
+            return null;
+        }
         return {
             'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json' // Add Content-Type for consistency
         };
     }
     

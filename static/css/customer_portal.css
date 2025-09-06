@@ -1,41 +1,29 @@
-#wrapper {
-    display: flex;
+.customer-portal .sidebar {
+    background-color: #eaf6ff;
+    border-right: 1px solid #d1eaff;
 }
 
-#sidebar-wrapper {
-    min-height: 100vh;
-    margin-left: -15rem;
-    transition: margin .25s ease-out;
+.customer-portal .sidebar-brand h3 {
+    color: #0056b3;
 }
 
-#sidebar-wrapper .sidebar-heading {
-    padding: 0.875rem 1.25rem;
-    font-size: 1.2rem;
+.customer-portal .sidebar-brand p {
+    color: #0056b3;
 }
 
-#sidebar-wrapper .list-group {
-    width: 15rem;
+.customer-portal .sidebar-nav .nav-link {
+    color: #0056b3;
 }
 
-#page-content-wrapper {
-    min-width: 100vw;
+.customer-portal .sidebar-nav .nav-link.active {
+    background-color: #cce7ff;
 }
 
-#wrapper.toggled #sidebar-wrapper {
-    margin-left: 0;
+.customer-portal .header {
+    background-color: #ffffff;
+    border-bottom: 1px solid #e0e0e0;
 }
 
-@media (min-width: 768px) {
-    #sidebar-wrapper {
-        margin-left: 0;
-    }
-
-    #page-content-wrapper {
-        min-width: 0;
-        width: 100%;
-    }
-
-    #wrapper.toggled #sidebar-wrapper {
-        margin-left: -15rem;
-    }
+.customer-portal .header-title h1 {
+    color: #333333;
 }

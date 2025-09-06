@@ -30,6 +30,13 @@ class CaseStatus(enum.Enum):
     CLOSED = "CLOSED"
     ESCALATED = "ESCALATED"
 
+class TransactionStatus(enum.Enum):
+    PENDING = "PENDING"
+    PROCESSING = "PROCESSING"
+    COMPLETED = "COMPLETED"
+    FLAGGED = "FLAGGED"
+    FAILED = "FAILED"
+
 class User(Base):
     __tablename__ = "users"
 
@@ -73,6 +80,7 @@ class Customer(Base):
     
     # Relationships
     transactions = relationship("Transaction", back_populates="customer")
+    accounts = relationship("Account", back_populates="customer")
 
 class Account(Base):
     __tablename__ = "accounts"
@@ -90,6 +98,9 @@ class Account(Base):
     daily_transaction_limit = Column(Float)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    customer = relationship("Customer", back_populates="accounts")
 
 class Transaction(Base):
     __tablename__ = "transactions"
@@ -127,6 +138,8 @@ class Transaction(Base):
     is_cross_border = Column(Boolean, default=False)
     is_high_value = Column(Boolean, default=False)
     ml_prediction = Column(String(255))
+    status = Column(Enum(TransactionStatus), default=TransactionStatus.PENDING, index=True)
+    processing_status = Column(String(255))
     
     # Audit trail
     created_at = Column(DateTime, server_default=func.now(), index=True)

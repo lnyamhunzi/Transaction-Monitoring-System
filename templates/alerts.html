@@ -510,11 +510,12 @@ class AlertsManagement {
         });
     }
     
-    async loadAlerts() {
+    async loadAlerts(queryString = '') {
         try {
             this.showLoading(true);
             
-            const response = await fetch('/api/alerts/?limit=1000', { headers: this.getAuthHeaders() });
+            const url = `/api/alerts/?limit=1000&${queryString}`;
+            const response = await fetch(url, { headers: this.getAuthHeaders() });
             if (response.status === 401) { window.location.href = '/admin/login'; return; }
             if (!response.ok) throw new Error('Failed to load alerts');
             
@@ -851,22 +852,32 @@ class AlertsManagement {
     }
     
     applyFilters() {
-        // Get filter values
-        const filters = {
-            status: document.getElementById('statusFilter').value,
-            type: document.getElementById('typeFilter').value,
-            risk: document.getElementById('riskFilter').value,
-            priority: document.getElementById('priorityFilter').value,
-            date: document.getElementById('dateFilter').value,
-            assigned: document.getElementById('assignedFilter').value
-        };
-        
-        // Apply filters to DataTable
-        this.alertsTable
-            .column(5).search(filters.status) // Status column
-            .column(2).search(filters.type)   // Type column
-            .column(6).search(filters.assigned) // Assigned column
-            .draw();
+        const status = document.getElementById('statusFilter').value;
+        const alert_type = document.getElementById('typeFilter').value;
+        const risk_level = document.getElementById('riskFilter').value;
+        const priority = document.getElementById('priorityFilter').value;
+        const date_range = document.getElementById('dateFilter').value;
+        const assigned_to = document.getElementById('assignedFilter').value;
+        const startDate = document.getElementById('startDate').value;
+        const endDate = document.getElementById('endDate').value;
+
+        const params = new URLSearchParams();
+        if (status) params.append('status', status);
+        if (alert_type) params.append('alert_type', alert_type);
+        if (risk_level) params.append('risk_level', risk_level);
+        if (priority) params.append('priority', priority);
+        if (assigned_to) params.append('assigned_to', assigned_to);
+
+        if (date_range) {
+            if (date_range === 'custom') {
+                if (startDate) params.append('start_date', startDate);
+                if (endDate) params.append('end_date', endDate);
+            } else {
+                params.append('time_range', date_range);
+            }
+        }
+
+        this.loadAlerts(params.toString());
     }
     
     incrementMetric(metricId) {

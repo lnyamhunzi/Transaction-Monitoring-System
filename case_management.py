@@ -313,7 +313,7 @@ class CaseManagementService:
             return {
                 'total_cases': total_cases,
                 'status_distribution': status_counts,
-                'avg_resolution_hours': avg_resolution_hours,
+                'avg_resolution_days': avg_resolution_hours / 24, # Convert hours to days
                 'sla_compliance_percentage': sla_compliance,
                 'sla_breached_count': sla_breached,
                 'decision_distribution': decisions,

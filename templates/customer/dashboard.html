@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block title %}Customer Dashboard{% endblock %}
+
+{% block page_title %}Welcome, {{ customer.full_name }}{% endblock %}
+
+{% block content %}
+<div class="container mt-5">
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Your Accounts</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row" id="customer-accounts">
+                        {% if accounts %}
+                            {% for account in accounts %}
+                            <div class="col-md-4 mb-3">
+                                <div class="card text-white bg-primary mb-3">
+                                    <div class="card-header">{{ account.account_type }} Account</div>
+                                    <div class="card-body">
+                                        <h5 class="card-title">{{ account.account_number }}</h5>
+                                        <p class="card-text display-6">{{ account.currency }} {{ account.balance | round(2) }}</p>
+                                        <p class="card-text"><small>Status: {{ account.status }}</small></p>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <p>No accounts found.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Recent Transactions</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-striped" id="customerTransactionsTable">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Type</th>
+                                    <th>Amount</th>
+                                    <th>Description</th>
+                                    <th>Channel</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Quick Actions</h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-grid gap-2">
+                        <a href="/portal/payment" class="btn btn-success btn-lg">
+                            <i class="fas fa-money-bill-wave me-2"></i>Make a Payment
+                        </a>
+                        <a href="/portal/transfer" class="btn btn-info btn-lg">
+                            <i class="fas fa-exchange-alt me-2"></i>Transfer Funds
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    $(document).ready(function() {
+        $('#customerTransactionsTable').DataTable({
+            "data": {{ transactions_data | tojson }},
+            "columns": [
+                { "data": "date" },
+                { "data": "type" },
+                { "data": "amount" },
+                { "data": "description" },
+                { "data": "channel" }
+            ]
+        });
+    });
+</script>
+{% endblock %}

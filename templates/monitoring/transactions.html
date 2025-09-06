@@ -10,32 +10,34 @@
         <h5 class="card-title">Transaction Search and Filtering</h5>
         <div class="row mb-3">
             <div class="col-md-4">
-                <input type="text" class="form-control" placeholder="Search by customer, account, or transaction ID">
+                <input type="text" class="form-control" id="transactionSearchInput" placeholder="Search by customer, account, or transaction ID">
             </div>
             <div class="col-md-2">
-                <select class="form-select">
-                    <option selected>All Types</option>
-                    <option>Deposit</option>
-                    <option>Withdrawal</option>
-                    <option>Transfer</option>
+                <select class="form-select" id="transactionTypeFilter">
+                    <option value="all">All Types</option>
+                    <option value="Deposit">Deposit</option>
+                    <option value="Withdrawal">Withdrawal</option>
+                    <option value="Transfer">Transfer</option>
+                    <option value="Payment">Payment</option>
                 </select>
             </div>
             <div class="col-md-2">
-                <select class="form-select">
-                    <option selected>All Statuses</option>
-                    <option>Completed</option>
-                    <option>Pending</option>
-                    <option>Failed</option>
+                <select class="form-select" id="transactionStatusFilter">
+                    <option value="all">All Statuses</option>
+                    <option value="Completed">Completed</option>
+                    <option value="Pending">Pending</option>
+                    <option value="Failed">Failed</option>
+                    <option value="Flagged">Flagged</option>
                 </select>
             </div>
             <div class="col-md-2">
-                <input type="date" class="form-control">
+                <input type="date" class="form-control" id="transactionDateFilter">
             </div>
             <div class="col-md-2">
-                <button class="btn btn-primary w-100">Search</button>
+                <button class="btn btn-primary w-100" id="applyTransactionFiltersBtn">Search</button>
             </div>
         </div>
-        <table class="table table-striped">
+        <table class="table table-striped" id="transactionsMonitoringTable">
             <thead>
                 <tr>
                     <th>Transaction ID</th>
@@ -48,50 +50,83 @@
                 </tr>
             </thead>
             <tbody>
-                <tr>
-                    <td>TXN123456</td>
-                    <td>John Doe</td>
-                    <td>Deposit</td>
-                    <td>$1,000.00</td>
-                    <td><span class="badge bg-success">Completed</span></td>
-                    <td>2025-08-31</td>
-                    <td><a href="#" class="btn btn-sm btn-outline-primary">View</a></td>
-                </tr>
-                <tr>
-                    <td>TXN123457</td>
-                    <td>Jane Smith</td>
-                    <td>Withdrawal</td>
-                    <td>$500.00</td>
-                    <td><span class="badge bg-success">Completed</span></td>
-                    <td>2025-08-31</td>
-                    <td><a href="#" class="btn btn-sm btn-outline-primary">View</a></td>
-                </tr>
-                <tr>
-                    <td>TXN123458</td>
-                    <td>Peter Jones</td>
-                    <td>Transfer</td>
-                    <td>$2,500.00</td>
-                    <td><span class="badge bg-warning">Pending</span></td>
-                    <td>2025-08-31</td>
-                    <td><a href="#" class="btn btn-sm btn-outline-primary">View</a></td>
-                </tr>
             </tbody>
         </table>
-        <nav aria-label="Page navigation">
-            <ul class="pagination justify-content-end">
-                <li class="page-item disabled">
-                    <a class="page-link" href="#" tabindex="-1" aria-disabled="true">Previous</a>
-                </li>
-                <li class="page-item active" aria-current="page">
-                    <a class="page-link" href="#">1</a>
-                </li>
-                <li class="page-item"><a class="page-link" href="#">2</a></li>
-                <li class="page-item"><a class="page-link" href="#">3</a></li>
-                <li class="page-item">
-                    <a class="page-link" href="#">Next</a>
-                </li>
-            </ul>
-        </nav>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+$(document).ready(function() {
+    var transactionsTable = $('#transactionsMonitoringTable').DataTable({
+        "processing": true,
+        "serverSide": true,
+        "ajax": {
+            "url": "/api/monitoring/transactions",
+            "type": "GET",
+            "data": function (d) {
+                d.search_term = $('#transactionSearchInput').val();
+                d.transaction_type = $('#transactionTypeFilter').val();
+                d.status = $('#transactionStatusFilter').val();
+                d.date = $('#transactionDateFilter').val();
+            }
+        },
+        "columns": [
+            { "data": "id" },
+            { "data": "customer_id" },
+            { "data": "transaction_type" },
+            { 
+                "data": "amount",
+                "render": function ( data, type, row ) {
+                    return `${row.currency} ${data.toFixed(2)}`;
+                }
+            },
+            { "data": "status" },
+            { 
+                "data": "created_at",
+                "render": function ( data, type, row ) {
+                    return new Date(data).toLocaleString();
+                }
+            },
+            {
+                "data": "id",
+                "render": function ( data, type, row ) {
+                    return `<a href="/monitoring/transactions/${data}" class="btn btn-sm btn-outline-primary">View</a>`;
+                }
+            }
+        ]
+    });
+
+    $('#applyTransactionFiltersBtn').on('click', function() {
+        transactionsTable.ajax.reload();
+    });
+
+    // WebSocket for real-time transaction status updates
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    const websocket = new WebSocket(wsUrl);
+
+    websocket.onopen = function(event) {
+        console.log("WebSocket connected for transactions monitoring.");
+    };
+
+    websocket.onmessage = function(event) {
+        const message = JSON.parse(event.data);
+        if (message.type === 'transaction_status_update') {
+            console.log("Received transaction status update:", message.data);
+            // Reload the DataTable to reflect the updated status
+            transactionsTable.ajax.reload(null, false); 
+        }
+    };
+
+    websocket.onclose = function(event) {
+        console.log("WebSocket disconnected for transactions monitoring.");
+    };
+
+    websocket.onerror = function(error) {
+        console.error("WebSocket error for transactions monitoring:", error);
+    };
+});
+</script>
 {% endblock %}

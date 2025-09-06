@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block title %}Customer Profile{% endblock %}
+
+{% block page_title %}Customer Profile{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-body">
+        <h5 class="card-title">Customer ID: <span id="customerId">{{ customer.customer_id }}</span></h5>
+        <div class="row mb-3">
+            <div class="col-md-6">
+                <p><strong>Full Name:</strong> {{ customer.full_name }}</p>
+                <p><strong>Email:</strong> {{ customer.email }}</p>
+                <p><strong>Risk Rating:</strong> <span class="badge bg-{{ customer.risk_rating | lower }}">{{ customer.risk_rating }}</span></p>
+                <p><strong>Account Opening Date:</strong> {{ customer.account_opening_date }}</p>
+            </div>
+            <div class="col-md-6">
+                <p><strong>Last Login:</strong> {{ customer.last_login }}</p>
+                <p><strong>Is PEP:</strong> {{ customer.is_pep }}</p>
+                <p><strong>Last Review Date:</strong> {{ customer.last_review_date }}</p>
+                </div>
+        </div>
+            </div>
+        </div>
+        <hr>
+        <h6>Recent Transactions</h6>
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Transaction ID</th>
+                    <th>Type</th>
+                    <th>Amount</th>
+                    <th>Date</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for transaction in customer.transactions %}
+                <tr>
+                    <td>{{ transaction.id }}</td>
+                    <td>{{ transaction.transaction_type }}</td>
+                    <td>{{ transaction.amount }} {{ transaction.currency }}</td>
+                    <td>{{ transaction.created_at }}</td>
+                    <td>{{ transaction.status }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <a href="/monitoring/customers" class="btn btn-secondary">Back to Customers</a>
+    </div>
+</div>
+{% endblock %}
