@@ -205,6 +205,11 @@ class AMLAdminPanel {
                 const userId = e.target.dataset.userId;
                 this.showUserAuditLog(userId);
             }
+
+            if (e.target.classList.contains('mark-complete-btn')) {
+                const transactionId = e.target.dataset.transactionId;
+                this.markTransactionAsComplete(transactionId);
+            }
         });
         
         // System actions
@@ -565,6 +570,42 @@ class AMLAdminPanel {
         } catch (error) {
             console.error('Error deleting user:', error);
             this.showError('Failed to delete user');
+        }
+    }
+
+    /**
+     * Mark transaction as complete
+     */
+    async markTransactionAsComplete(transactionId) {
+        try {
+            this.showLoading('Marking transaction as complete...');
+            const headers = this.getAuthHeaders();
+            if (!headers) return;
+
+            const response = await fetch(`/api/transactions/${transactionId}/status`, {
+                method: 'PUT',
+                headers: headers,
+                body: JSON.stringify({ status: 'COMPLETED' })
+            });
+
+            if (response.status === 401) { window.location.href = '/admin/login'; return; }
+            if (!response.ok) throw new Error('Failed to mark transaction as complete');
+
+            const result = await response.json();
+            this.showSuccess(result.message);
+            
+            // Refresh the recent transactions table
+            // This assumes the dashboard has a method to refresh transactions, or we can reload the page
+            // For now, let's just reload the page for simplicity, or ideally, update the specific row.
+            // A more sophisticated approach would be to update the specific row in the table.
+            // For this example, we'll just reload the page to reflect the change.
+            window.location.reload();
+
+        } catch (error) {
+            console.error('Error marking transaction as complete:', error);
+            this.showError('Failed to mark transaction as complete');
+        } finally {
+            this.hideLoading();
         }
     }
 

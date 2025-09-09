@@ -147,40 +147,24 @@
             </div>
             <div class="card-body">
                 <div class="table-responsive">
-                    <table class="table table-striped table-hover">
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>Customer ID</th>
-                                <th>Amount</th>
-                                <th>Currency</th>
-                                <th>Type</th>
-                                <th>Channel</th>
-                                <th>Risk Score</th>
-                                <th>Status</th>
-                                <th>Timestamp</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for transaction in recent_transactions %}
-                            <tr>
-                                <td>{{ transaction.id[:8] }}...</td>
-                                <td>{{ transaction.customer_id[:8] }}...</td>
-                                <td>{{ transaction.amount | format_currency(transaction.currency) }}</td>
-                                <td>{{ transaction.currency }}</td>
-                                <td>{{ transaction.transaction_type }}</td>
-                                <td>{{ transaction.channel }}</td>
-                                <td><span class="badge bg-{{ transaction.risk_score | risklevel }}">{{ transaction.risk_score }}</span></td>
-                                <td>{{ transaction.status }}</td>
-                                <td>{{ transaction.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-                            </tr>
-                            {% else %}
-                            <tr>
-                                <td colspan="9" class="text-center">No recent transactions found.</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
+                    <table class="table table-striped" id="recentTransactionsTable">
+            <thead>
+                <tr>
+                    <th>Transaction ID</th>
+                    <th>Customer ID</th>
+                    <th>Amount</th>
+                    <th>Currency</th>
+                    <th>Type</th>
+                    <th>Channel</th>
+                    <th>Risk Score</th>
+                    <th>Status</th>
+                    <th>Timestamp</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+            </tbody>
+        </table>
                 </div>
             </div>
         </div>
@@ -564,6 +548,124 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+$(document).ready(function() {
+    var recentTransactionsTable = $('#recentTransactionsTable').DataTable({
+        "processing": true,
+        "serverSide": true,
+        "ajax": {
+            "url": "/api/admin/transactions/recent", // This endpoint needs to be updated to support DataTables server-side
+            "type": "GET",
+            "data": function (d) {
+                // DataTables sends draw, start, length, search[value], order[0][column], order[0][dir]
+                // No custom filters for now, but can be added here later
+            }
+        },
+        "columns": [
+            { "data": "id", "render": function(data, type, row) { return data.substring(0, 8) + '...'; } },
+            { "data": "customer_id", "render": function(data, type, row) { return data.substring(0, 8) + '...'; } },
+            { 
+                "data": "amount",
+                "render": function ( data, type, row ) {
+                    // Use AMLBase.formatCurrency if available, otherwise fallback
+                    if (typeof AMLBase !== 'undefined' && AMLBase.formatCurrency) {
+                        return AMLBase.formatCurrency(data, row.currency);
+                    } else {
+                        return `${row.currency} ${data.toFixed(2)}`;
+                    }
+                }
+            },
+            { "data": "currency" },
+            { "data": "transaction_type" },
+            { "data": "channel" },
+            { 
+                "data": "risk_score",
+                "render": function ( data, type, row ) {
+                    // Use AMLBase.getRiskLevel if available, otherwise fallback
+                    let riskLevel = 'low';
+                    if (typeof AMLBase !== 'undefined' && AMLBase.getRiskLevel) {
+                        riskLevel = AMLBase.getRiskLevel(data);
+                    } else if (data >= 0.9) {
+                        riskLevel = 'critical';
+                    } else if (data >= 0.7) {
+                        riskLevel = 'high';
+                    } else if (data >= 0.4) {
+                        riskLevel = 'medium';
+                    }
+                    return `<span class="badge bg-${riskLevel}">${data}</span>`;
+                }
+            },
+            { 
+                "data": "status",
+                "render": function ( data, type, row ) {
+                    return `<span class="status-badge status-${data.toLowerCase()}">${data}</span>`;
+                }
+            },
+            { 
+                "data": "created_at",
+                "render": function ( data, type, row ) {
+                    // Data is already formatted as string from backend
+                    return data;
+                }
+            },
+            {
+                "data": "status", // Use status to determine if button should be shown
+                "render": function ( data, type, row ) {
+                    let actionsHtml = '';
+                    if (data === 'FLAGGED' || data === 'PENDING') {
+                        actionsHtml = `<button class="btn btn-sm btn-success mark-complete-btn" data-transaction-id="${row.id}">Mark Complete</button>`;
+                    }
+                    return actionsHtml;
+                }
+            }
+        ]
+    });
+
+    // Event listener for Mark Complete button
+    $('#recentTransactionsTable tbody').on('click', '.mark-complete-btn', async function () {
+        const transactionId = $(this).data('transaction-id');
+        try {
+            // Use AMLBase.showToast for notifications
+            if (typeof AMLBase !== 'undefined' && AMLBase.showToast) {
+                AMLBase.showToast('Marking transaction as complete...', 'info');
+            }
+
+            const token = await getAuthToken(); // Assuming getAuthToken is global from utils.js
+            if (!token) {
+                window.location.href = '/admin/login';
+                return;
+            }
+
+            const response = await fetch(`/api/transactions/${transactionId}/status`, {
+                method: 'PUT',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ status: 'COMPLETED' })
+            });
+
+            if (response.status === 401) { window.location.href = '/admin/login'; return; }
+            if (!response.ok) throw new Error('Failed to mark transaction as complete');
+
+            const result = await response.json();
+            if (typeof AMLBase !== 'undefined' && AMLBase.showToast) {
+                AMLBase.showToast(result.message, 'success');
+            }
+            recentTransactionsTable.ajax.reload(null, false); // Reload DataTable
+
+        } catch (error) {
+            console.error('Error marking transaction as complete:', error);
+            if (typeof AMLBase !== 'undefined' && AMLBase.showToast) {
+                AMLBase.showToast('Failed to mark transaction as complete', 'danger');
+            }
+        }
+    });
+});
+</script>
 {% endblock %}
 
 {% block extra_scripts %}

@@ -193,7 +193,7 @@ def format_currency(amount: float, currency: str = "USD") -> str:
         return f"{currency} {amount:,.2f}"
 
 templates.env.filters['risklevel'] = risklevel
-templates.env.globals['format_currency'] = format_currency
+templates.env.filters['format_currency'] = format_currency
 
 # --- Security ---
 
@@ -447,7 +447,22 @@ async def admin_panel(request: Request, db: Session = Depends(get_db)):
         return current_user
 
     # Fetch recent transactions and alerts from the database
-    recent_transactions = db.query(Transaction).order_by(Transaction.created_at.desc()).limit(10).all()
+    recent_transactions_db = db.query(Transaction).order_by(Transaction.created_at.desc()).limit(10).all()
+    
+    recent_transactions = []
+    for t in recent_transactions_db:
+        recent_transactions.append({
+            "id": t.id,
+            "customer_id": t.customer_id,
+            "amount": t.amount,
+            "currency": t.currency,
+            "transaction_type": t.transaction_type,
+            "channel": t.channel,
+            "risk_score": float(t.risk_score) if t.risk_score is not None else 0.0, # Ensure float, default to 0.0
+            "status": t.status.value if hasattr(t.status, 'value') else str(t.status),
+            "created_at": t.created_at.strftime('%Y-%m-%d %H:%M') if t.created_at else "Invalid Date" # Format date here
+        })
+
     alerts = db.query(Alert).filter(Alert.status == AlertStatus.OPEN).all()
 
     return templates.TemplateResponse("admin.html", {
@@ -798,6 +813,82 @@ async def get_system_status(db: Session = Depends(get_db), current_user: User = 
         "ml_predictions_today": 200
     }
 
+@app.get("/api/dashboard/stats")
+async def get_dashboard_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+
+    today = datetime.now().date()
+    
+    total_transactions = db.query(Transaction).count()
+    today_transactions = db.query(Transaction).filter(func.date(Transaction.created_at) == today).count()
+    
+    open_alerts = db.query(Alert).filter(Alert.status == AlertStatus.OPEN).count()
+    high_risk_alerts = db.query(Alert).filter(Alert.risk_score >= 0.8, Alert.status == AlertStatus.OPEN).count()
+
+    # Risk Distribution (example: group by risk level)
+    risk_distribution_data = db.query(
+        case(
+            (Alert.risk_score >= 0.9, 'critical'),
+            (Alert.risk_score >= 0.7, 'high'),
+            (Alert.risk_score >= 0.4, 'medium'),
+            else_='low'
+        ).label('risk_level'),
+        func.count(Alert.id).label('count'),
+        func.avg(Alert.risk_score).label('avg_risk')
+    ).group_by('risk_level').all()
+
+    risk_distribution = []
+    for item in risk_distribution_data:
+        risk_distribution.append({
+            "risk_level": item.risk_level,
+            "count": item.count,
+            "avg_risk": round(item.avg_risk, 2)
+        })
+
+    # Alert Trends (example: daily high and medium risk alerts for last 7 days)
+    alert_trends_data = db.query(
+        func.date(Alert.created_at).label('date'),
+        func.sum(case((Alert.risk_score >= 0.7, 1), else_=0)).label('high_risk_count'),
+        func.sum(case((Alert.risk_score >= 0.4, 1), (Alert.risk_score < 0.7, 1), else_=0)).label('medium_risk_count')
+    ).filter(
+        Alert.created_at >= datetime.now() - timedelta(days=7)
+    ).group_by('date').order_by('date').all()
+
+    alert_trends = {
+        "labels": [item.date.isoformat() for item in alert_trends_data],
+        "high_risk": [item.high_risk_count for item in alert_trends_data],
+        "medium_risk": [item.medium_risk_count for item in alert_trends_data]
+    }
+
+    return {
+        "total_transactions": total_transactions,
+        "today_transactions": today_transactions,
+        "open_alerts": open_alerts,
+        "high_risk_alerts": high_risk_alerts,
+        "risk_distribution": risk_distribution,
+        "alert_trends": alert_trends
+    }
+
+@app.get("/api/dashboard/aml-control-summary")
+async def get_aml_control_summary(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+
+    aml_summary = db.query(
+        Alert.alert_type,
+        func.count(Alert.id).label('triggered_count'),
+        func.avg(Alert.risk_score).label('average_risk_score')
+    ).group_by(Alert.alert_type).all()
+
+    return [
+        {
+            "control_type": item.alert_type,
+            "triggered_count": item.triggered_count,
+            "average_risk_score": round(item.average_risk_score, 2) if item.average_risk_score else 0.0
+        } for item in aml_summary
+    ]
+
 @app.get("/api/admin/configuration")
 async def get_configuration(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
     config_settings = db.query(SystemConfiguration).all()
@@ -966,6 +1057,32 @@ async def get_admin_recent_transactions(db: Session = Depends(get_db), limit: in
             "timestamp": t.created_at.isoformat(),
         } for t in transactions
     ]
+
+@app.put("/api/transactions/{transaction_id}/status")
+async def update_transaction_status(
+    transaction_id: str,
+    status: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_from_cookie)
+):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    
+    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    try:
+        # Validate the new status against the TransactionStatus enum
+        new_status = TransactionStatus[status.upper()]
+    except KeyError:
+        raise HTTPException(status_code=400, detail=f"Invalid status: {status}. Must be one of {', '.join([s.value for s in TransactionStatus])}")
+
+    transaction.status = new_status
+    db.commit()
+    db.refresh(transaction)
+
+    return {"message": f"Transaction {transaction_id} status updated to {new_status.value}"}
 
 @app.get("/api/monitoring/transactions")
 async def api_get_transactions(request: Request, db: Session = Depends(get_db),
@@ -1183,7 +1300,7 @@ async def create_transaction(
 async def process_transaction_controls(transaction_id: str, transaction_data: dict):
     """Background task to process AML controls"""
     db = next(get_db())
-    logger.info(f"[process_transaction_controls] Starting for transaction_id: {transaction_id}")
+    logger.debug(f"[process_transaction_controls] Starting for transaction_id: {transaction_id}")
     
     try:
         transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
@@ -1191,11 +1308,12 @@ async def process_transaction_controls(transaction_id: str, transaction_data: di
             logger.error(f"[process_transaction_controls] Transaction {transaction_id} not found for processing.")
             return
 
-        logger.info(f"[process_transaction_controls] Setting status to PROCESSING for {transaction_id}")
+        logger.debug(f"[process_transaction_controls] Setting status to PROCESSING for {transaction_id}")
         transaction.status = TransactionStatus.PROCESSING
         db.commit()
         db.refresh(transaction)
-        logger.info(f"[process_transaction_controls] Status updated to PROCESSING for {transaction_id}")
+        logger.debug(f"[process_transaction_controls] Status updated to PROCESSING for {transaction_id}")
+        logger.debug(f"[process_transaction_controls] Committing status update to PROCESSING for {transaction_id}")
 
         # Run all AML controls
         logger.info(f"[process_transaction_controls] Running AML controls for {transaction_id}")
@@ -1259,15 +1377,16 @@ async def process_transaction_controls(transaction_id: str, transaction_data: di
             alerts_created.append(alert)
         
         if alerts_created:
-            logger.info(f"[process_transaction_controls] Alerts created for {transaction_id}. Setting status to FLAGGED.")
+            logger.debug(f"[process_transaction_controls] Alerts created for {transaction_id}. Setting status to FLAGGED.")
             transaction.status = TransactionStatus.FLAGGED
         else:
-            logger.info(f"[process_transaction_controls] No alerts created for {transaction_id}. Setting status to COMPLETED.")
+            logger.debug(f"[process_transaction_controls] No alerts created for {transaction_id}. Setting status to COMPLETED.")
             transaction.status = TransactionStatus.COMPLETED
         
         db.commit()
         db.refresh(transaction)
-        logger.info(f"[process_transaction_controls] Final status updated to {transaction.status} for {transaction_id}")
+        logger.debug(f"[process_transaction_controls] Final status updated to {transaction.status} for {transaction_id}")
+        logger.debug(f"[process_transaction_controls] Committing final status update to {transaction.status} for {transaction_id}")
 
         # Send real-time update for transaction status
         await manager.broadcast({
@@ -1303,7 +1422,8 @@ async def process_transaction_controls(transaction_id: str, transaction_data: di
         transaction.processing_status = str(e)
         db.commit()
         db.refresh(transaction)
-        logger.error(f"[process_transaction_controls] Status updated to FAILED for {transaction_id} due to error.")
+        logger.debug(f"[process_transaction_controls] Status updated to FAILED for {transaction_id} due to error.")
+        logger.debug(f"[process_transaction_controls] Committing status update to FAILED for {transaction_id}")
         
         # Send real-time update for failed transaction status
         await manager.broadcast({
