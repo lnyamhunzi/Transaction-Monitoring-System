@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc
 
 from models import Case, Alert, CaseActivity, CaseStatus
+from fastapi import HTTPException
 from notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
@@ -36,8 +37,9 @@ class CaseManagementService:
             'CLOSED': []  # Final state
         }
     
-    async def create_case(self, db: Session, alert_id: str = None, title: str = None, description: str = None, priority: str = 'MEDIUM', assigned_to: str = None, investigation_notes: str = None) -> Case:
+    async def create_case(self, db: Session, alert_id: str = None, title: str = None, description: str = None, priority: str = 'MEDIUM', assigned_to: str = None, investigation_notes: str = None, target_completion_date: datetime = None) -> Case:
         """Create a new investigation case"""
+        logger.info(f"Creating case with alert_id: {alert_id}, title: {title}")
         try:
             # Generate case number
             case_number = await self.generate_case_number(db)
@@ -46,19 +48,28 @@ class CaseManagementService:
             if alert_id:
                 alert = db.query(Alert).filter(Alert.id == alert_id).first()
 
+            if alert_id and not alert:
+                raise HTTPException(status_code=404, detail=f"Alert with ID {alert_id} not found.")
+
             if alert:
                 # Determine case priority based on alert
                 priority = self.determine_case_priority(alert)
                 title = title or f"{alert.alert_type} - Customer {alert.transaction.customer_id}"
                 description = description or f"Investigation case created from alert: {alert.description}"
 
+            # Ensure assigned_to is not None or empty string
+            assigned_to = assigned_to if assigned_to else "Unassigned"
+            assigned_to = assigned_to if assigned_to else "Unassigned"
+
             # Calculate target completion date based on SLA
             sla_hours = self.sla_config.get(priority, 72)
             target_completion = datetime.now() + timedelta(hours=sla_hours)
             
             # Create case
+            # Convert empty string alert_id to None to satisfy foreign key constraint
+            alert_id_for_db = alert_id if alert_id != "" else None
             case = Case(
-                alert_id=alert_id,
+                alert_id=alert_id_for_db,
                 case_number=case_number,
                 title=title,
                 description=description,

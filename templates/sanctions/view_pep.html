@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}View PEP Entry{% endblock %}
+
+{% block page_title %}View PEP Entry{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-body">
+        <h5 class="card-title" id="entryTitle">Loading...</h5>
+        <div class="mb-3">
+            <strong>Full Name:</strong> <span id="full_name"></span>
+        </div>
+        <div class="mb-3">
+            <strong>Country:</strong> <span id="country"></span>
+        </div>
+        <div class="mb-3">
+            <strong>Position:</strong> <span id="position"></span>
+        </div>
+        <div class="mb-3">
+            <strong>Start Date:</strong> <span id="start_date"></span>
+        </div>
+        <div class="mb-3">
+            <strong>Created At:</strong> <span id="createdAt"></span>
+        </div>
+        <div class="mb-3">
+            <strong>Updated At:</strong> <span id="updatedAt"></span>
+        </div>
+        <a href="/sanctions/pep" class="btn btn-secondary">Back to List</a>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', async function() {
+        const pepId = window.location.pathname.split('/').pop();
+        if (!pepId) {
+            alert('Error: No PEP ID provided.');
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/pep/lists/${pepId}`, {
+                headers: {
+                    'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
+                }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                document.getElementById('entryTitle').textContent = `Details for ${data.full_name}`;
+                document.getElementById('full_name').textContent = data.full_name;
+                document.getElementById('country').textContent = data.country || 'N/A';
+                document.getElementById('position').textContent = data.position || 'N/A';
+                document.getElementById('start_date').textContent = data.start_date ? new Date(data.start_date).toLocaleDateString() : 'N/A';
+                document.getElementById('createdAt').textContent = data.created_at ? new Date(data.created_at).toLocaleString() : 'N/A';
+                document.getElementById('updatedAt').textContent = data.updated_at ? new Date(data.updated_at).toLocaleString() : 'N/A';
+            } else {
+                const errorData = await response.json();
+                alert(`Error: ${errorData.detail || response.statusText}`);
+                document.getElementById('entryTitle').textContent = 'Error loading details.';
+            }
+        } catch (error) {
+            console.error('Error fetching PEP entry:', error);
+            alert('An error occurred while fetching the entry details.');
+            document.getElementById('entryTitle').textContent = 'Error loading details.';
+        }
+    });
+</script>
+{% endblock %}

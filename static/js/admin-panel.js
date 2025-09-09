@@ -243,6 +243,45 @@ class AMLAdminPanel {
         if (uploadSanctionsBtn) {
             uploadSanctionsBtn.addEventListener('click', () => this.showUploadSanctionsModal());
         }
+
+        // New button for Analyst Self-Posting Transaction
+        const createAdminSelfPostingBtn = document.getElementById('createAdminSelfPostingTransaction');
+        if (createAdminSelfPostingBtn) {
+            createAdminSelfPostingBtn.addEventListener('click', () => this.createAdminSelfPostingTransaction());
+        }
+    }
+
+    /**
+     * Create a self-posting test transaction for Control 1
+     */
+    async createAdminSelfPostingTransaction() {
+        try {
+            this.showLoading('Creating staff self-posting test transaction...');
+            const headers = this.getAuthHeaders();
+            if (!headers) return;
+
+            const response = await fetch('/api/admin/create_self_transaction', {
+                method: 'POST',
+                headers: headers
+            });
+
+            if (response.status === 401) { window.location.href = '/admin/login'; return; }
+            if (!response.ok) throw new Error('Failed to create self-posting test transaction');
+
+            const result = await response.json();
+            this.showSuccess(result.message);
+            // Optionally refresh recent transactions table if it's on the same page
+            // Assuming recentTransactionsTable is a global DataTable instance or can be reloaded
+            if ($.fn.DataTable.isDataTable('#recentTransactionsTable')) {
+                $('#recentTransactionsTable').DataTable().ajax.reload(null, false);
+            }
+            
+        } catch (error) {
+            console.error('Error creating self-posting test transaction:', error);
+            this.showError('Failed to create self-posting test transaction');
+        } finally {
+            this.hideLoading();
+        }
     }
     
     /**
@@ -255,21 +294,29 @@ class AMLAdminPanel {
             const formData = new FormData(e.target);
             const config = {};
             
-            // Convert form data to configuration object
+            // Manually handle checkboxes as FormData doesn't include unchecked ones
+            config.email_notifications_enabled = document.getElementById('email-notifications').checked;
+            config.sms_notifications_enabled = document.getElementById('sms-notifications').checked;
+            config.ml_scoring_enabled = document.getElementById('ml-enabled').checked;
+
+            // Convert other form data to configuration object
             for (let [key, value] of formData.entries()) {
-                if (value === 'on') {
-                    config[key] = true;
-                } else if (value === 'off' || value === '') {
-                    config[key] = false;
-                } else if (!isNaN(value) && value !== '') {
+                if (key === 'email_notifications_enabled' || key === 'sms_notifications_enabled' || key === 'ml_scoring_enabled') {
+                    // Already handled
+                    continue;
+                }
+                // Handle specific types
+                if (key.startsWith('risk_threshold_') || key === 'anomaly_threshold') {
                     config[key] = parseFloat(value);
+                } else if (key.startsWith('limit_usd_') || key === 'alert_retention_days' || key === 'model_retrain_interval_days') {
+                    config[key] = parseInt(value);
                 } else {
                     config[key] = value;
                 }
             }
             
             const response = await fetch('/api/admin/configuration', {
-                method: 'PUT',
+                method: 'POST',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify(config)
             });
@@ -331,7 +378,6 @@ class AMLAdminPanel {
                                 <label class="form-label">Role</label>
                                 <select class="form-control" name="role" required>
                                     <option value="compliance_officer" ${userData?.role === 'compliance_officer' ? 'selected' : ''}>Compliance Officer</option>
-                                    <option value="aml_analyst" ${userData?.role === 'aml_analyst' ? 'selected' : ''}>AML Analyst</option>
                                     <option value="supervisor" ${userData?.role === 'supervisor' ? 'selected' : ''}>Supervisor</option>
                                     <option value="admin" ${userData?.role === 'admin' ? 'selected' : ''}>Administrator</option>
                                 </select>
@@ -632,20 +678,26 @@ class AMLAdminPanel {
     /**
      * Update ML models
      */
-    async showUserAuditLog(userId) {
+    async updateMLModels() {
         try {
-            const response = await fetch(`/api/admin/users/${userId}/audit`, { headers: this.getAuthHeaders() });
-            if (response.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!response.ok) throw new Error('Failed to load user audit log');
+            this.showLoading('Updating ML models...');
             
-            const auditLog = await response.json();
-            // Display the audit log in a modal or a dedicated view
-            console.log(auditLog);
-            this.showInfo('User audit log loaded. See console for details.');
-
+            const response = await fetch('/api/admin/ml-models/retrain', {
+                method: 'POST',
+                headers: this.getAuthHeaders()
+            });
+            if (response.status === 401) { window.location.href = '/admin/login'; return; }
+            if (!response.ok) throw new Error('Failed to update ML models');
+            
+            const result = await response.json();
+            this.showSuccess('ML models updated successfully');
+            this.loadMLModelsStatus(); // Refresh status after update
+            
         } catch (error) {
-            console.error('Error loading user audit log:', error);
-            this.showError('Failed to load user audit log');
+            console.error('Error updating ML models:', error);
+            this.showError('Failed to update ML models');
+        } finally {
+            this.hideLoading();
         }
     }
     
@@ -757,7 +809,7 @@ class AMLAdminPanel {
             if (!response.ok) throw new Error('Failed to update sanctions lists');
             
             const result = await response.json();
-            this.showSuccess(`Updated ${result.updated_entries} sanctions entries`);
+            this.showSuccess(result.message);
             
         } catch (error) {
             console.error('Error updating sanctions lists:', error);
@@ -869,18 +921,8 @@ class AMLAdminPanel {
             if (response.status === 401) { window.location.href = '/admin/login'; return; }
             if (!response.ok) throw new Error('Failed to create backup');
             
-            // Download the backup file
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `aml_backup_${new Date().toISOString().split('T')[0]}.sql`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
-            
-            this.showSuccess('System backup created successfully');
+            const result = await response.json();
+            this.showSuccess(result.message);
             
         } catch (error) {
             console.error('Error creating backup:', error);

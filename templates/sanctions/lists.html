@@ -19,7 +19,7 @@
                 <button class="btn btn-primary w-100">Search</button>
             </div>
         </div>
-        <table class="table table-striped">
+        <table class="table table-striped" id="sanctionsListsTable">
             <thead>
                 <tr>
                     <th>List Name</th>
@@ -75,4 +75,8 @@
         </nav>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/sanctions-lists.js"></script>
 {% endblock %}

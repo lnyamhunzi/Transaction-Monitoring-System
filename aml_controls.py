@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc, func
 
-from models import Transaction, Customer, Alert
+from models import Transaction, Customer, Alert, User, Account
 from utils import calculate_transaction_velocity, get_customer_transaction_history
 
 logger = logging.getLogger(__name__)
@@ -66,34 +66,48 @@ class AMLControlEngine:
         description = ""
         metadata = {}
         
+        # Get all staff usernames
+        staff_roles = ["admin", "compliance_officer", "aml_analyst", "supervisor"]
+        staff_users = db.query(User).filter(User.role.in_(staff_roles)).all()
+        staff_usernames = {user.username for user in staff_users}
+
         # Check if staff is posting to their own account
         if processed_by and customer_id:
-            # Assuming staff IDs follow a pattern or we have a staff table
-            if processed_by == customer_id or processed_by in customer_id:
-                triggered = True
-                risk_score = 0.9
-                description = "Staff member posting transaction to own account"
-                metadata = {
-                    'staff_id': processed_by,
-                    'customer_id': customer_id,
-                    'violation_type': 'self_posting'
-                }
-        
+            processing_user = db.query(User).filter(User.username == processed_by).first()
+            customer = db.query(Customer).filter(Customer.customer_id == customer_id).first()
+
+            if processing_user and customer and processing_user.username in staff_usernames:
+                # Check if the processor is the same as the customer (by username)
+                if customer.username == processing_user.username:
+                    triggered = True
+                    risk_score = 0.9
+                    description = "Staff member posting transaction to own account"
+                    metadata = {
+                        'staff_id': processed_by,
+                        'customer_id': customer_id,
+                        'violation_type': 'self_posting'
+                    }
+
         # Check for suspense account to staff account transfers
         suspense_accounts = ['SUSPENSE', 'SUSP', '999999']
         if any(susp in str(counterparty_account or '').upper() for susp in suspense_accounts):
-            # Check if destination is staff account
-            customer = db.query(Customer).filter(Customer.customer_id == customer_id).first()
-            if customer and any(staff_indicator in customer.full_name.upper() 
-                             for staff_indicator in ['STAFF', 'EMPLOYEE', 'EMP']):
-                triggered = True
-                risk_score = 0.85
-                description = "Suspense account debited to credit staff account"
-                metadata = {
-                    'suspense_account': counterparty_account,
-                    'staff_account': account_number,
-                    'violation_type': 'suspense_to_staff'
-                }
+            # Find the account being credited (transaction's account_number)
+            credited_account = db.query(Account).filter(Account.account_number == account_number).first()
+
+            if credited_account:
+                # Find the customer associated with the credited account
+                credited_customer = db.query(Customer).filter(Customer.customer_id == credited_account.customer_id).first()
+
+                # Check if the credited customer is a staff member
+                if credited_customer and credited_customer.username in staff_usernames:
+                    triggered = True
+                    risk_score = 0.85
+                    description = "Suspense account debited to credit staff account"
+                    metadata = {
+                        'suspense_account': counterparty_account,
+                        'staff_account': account_number,
+                        'violation_type': 'suspense_to_staff'
+                    }
         
         return {
             'triggered': triggered,

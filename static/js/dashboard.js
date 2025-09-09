@@ -3,11 +3,18 @@
  * Real-time monitoring and interactive dashboard functionality
  */
 
+// Function to get the authentication token from localStorage
+function getAuthToken() {
+    return localStorage.getItem('admin_token');
+}
+
+
 class AMLDashboard {
     constructor() {
         this.websocket = null;
         this.charts = {};
         this.alertsTable = null;
+        this.transactionsTable = null;
         this.isConnected = false;
         
         // Configuration
@@ -34,6 +41,7 @@ class AMLDashboard {
         try {
             await this.setupWebSocket();
             await this.initializeCharts();
+            await this.initTransactionsTable();
             await this.loadInitialData();
             await this.setupEventListeners();
             await this.startPeriodicRefresh();
@@ -103,17 +111,16 @@ class AMLDashboard {
             case 'system_status':
                 this.handleSystemStatus(message.status);
                 break;
-            case 'transactions_update':
-                this.updateTransactionsTable(message.transactions);
+            case 'transaction_status_update':
+                if (this.transactionsTable) {
+                    this.transactionsTable.ajax.reload(null, false);
+                }
                 break;
             default:
                 console.log('Unknown message type:', message.type);
         }
     }
     
-    /**
-     * Get authentication headers
-     */
     /**
      * Get authentication headers
      */
@@ -155,24 +162,35 @@ class AMLDashboard {
             this.updateAmlControlSummary(amlSummary);
 
             // Load recent alerts
-            const alertsResponse = await fetch('/api/alerts/', { headers });
-            if (alertsResponse.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!alertsResponse.ok) throw new Error('Failed to load alerts');
-            const alerts = await alertsResponse.json();
-            
-            this.updateAlertsTable(alerts);
+            this.loadAlerts();
 
-            // Load recent transactions
-            const transactionsResponse = await fetch('/api/admin/transactions/recent', { headers });
-            if (transactionsResponse.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!transactionsResponse.ok) throw new Error('Failed to load transactions');
-            const transactions = await transactionsResponse.json();
-
-            this.updateTransactionsTable(transactions);
+            // transactions are loaded by datatables ajax
             
         } catch (error) {
             console.error('Error loading initial data:', error);
             this.showError('Failed to load dashboard data');
+        } finally {
+            this.showLoading(false);
+        }
+    }
+
+    async loadAlerts(queryString = '') {
+        try {
+            this.showLoading(true);
+            const headers = await this.getAuthHeaders();
+            if (!headers) return;
+
+            const url = `/api/alerts/?${queryString}`;
+            const response = await fetch(url, { headers });
+            if (response.status === 401) { window.location.href = '/admin/login'; return; }
+            if (!response.ok) throw new Error('Failed to load alerts');
+            
+            const alerts = await response.json();
+            this.updateAlertsTable(alerts);
+            
+        } catch (error) {
+            console.error('Error loading alerts:', error);
+            this.showError('Failed to load alerts');
         } finally {
             this.showLoading(false);
         }
@@ -525,7 +543,9 @@ class AMLDashboard {
         }
 
         // Add new transaction to table
-        this.addTransactionToTable(transaction);
+        if (this.transactionsTable) {
+            this.transactionsTable.row.add(transaction).draw(false);
+        }
     }
     
     /**
@@ -555,6 +575,16 @@ class AMLDashboard {
             typeFilter.addEventListener('change', () => this.filterAlerts());
         }
         
+        // Transaction filters
+        const applyTransactionFiltersBtn = document.getElementById('applyTransactionFiltersBtn');
+        if(applyTransactionFiltersBtn) {
+            applyTransactionFiltersBtn.addEventListener('click', () => {
+                if (this.transactionsTable) {
+                    this.transactionsTable.ajax.reload();
+                }
+            });
+        }
+
         // Modal triggers
         document.addEventListener('click', (e) => {
             if (e.target.classList.contains('view-alert-btn')) {
@@ -603,157 +633,99 @@ class AMLDashboard {
         const timeRange = document.getElementById('timeRangeFilter').value;
         const riskLevel = document.getElementById('riskLevelFilter').value;
 
-        if (window.alertsDataTable) {
-            // Clear existing search/filters
-            window.alertsDataTable.search('').columns().search('').draw();
+        const params = new URLSearchParams();
+        if (status) params.append('status', status);
+        if (type) params.append('alert_type', type);
+        if (timeRange) params.append('time_range', timeRange);
+        if (riskLevel) params.append('risk_level', riskLevel);
 
-            // Apply status filter
-            if (status) {
-                window.alertsDataTable.column(4).search(status).draw(); // Assuming status is the 5th column (index 4)
-            }
-
-            // Apply type filter
-            if (type) {
-                window.alertsDataTable.column(1).search(type).draw(); // Assuming type is the 2nd column (index 1)
-            }
-
-            // Apply risk level filter (this will be more complex as it's based on score range)
-            if (riskLevel) {
-                // Custom filter for risk level
-                $.fn.dataTable.ext.search.push((settings, data, dataIndex) => {
-                    const riskScoreText = data[0]; // Assuming risk score is part of the first column's text
-                    const scoreMatch = riskScoreText.match(/risk-(\w+)/);
-                    if (scoreMatch && scoreMatch[1] === riskLevel) {
-                        return true;
-                    }
-                    return false;
-                });
-                window.alertsDataTable.draw();
-                $.fn.dataTable.ext.search.pop(); // Remove the custom filter after drawing
-            }
-
-            // Time range filter would typically involve re-fetching data from the server
-            // For now, we'll assume it's handled server-side or requires a more complex client-side date comparison.
-            // If this needs to be implemented client-side, it would involve parsing dates from the table.
-            console.log(`Applying filters: Status=${status}, Type=${type}, TimeRange=${timeRange}, RiskLevel=${riskLevel}`);
-        }
+        this.loadAlerts(params.toString());
     }
 
     /**
      * Update alerts table
      */
     updateAlertsTable(alerts) {
-        const tbody = document.querySelector('#alertsTable tbody');
-        if (!tbody) return;
-        
-        tbody.innerHTML = '';
-        
-        alerts.forEach(alert => {
-            this.addAlertToTable(alert);
-        });
-    }
-
-    updateTransactionsTable(transactions) {
-        const tbody = document.querySelector('#transactionsTable tbody');
-        if (!tbody) return;
-
-        tbody.innerHTML = '';
-
-        transactions.forEach(transaction => {
-            const row = document.createElement('tr');
-            row.innerHTML = `
-                <td>${transaction.id}</td>
-                <td>${transaction.customer_id}</td>
-                <td>${this.formatCurrency(transaction.amount, transaction.currency)}</td>
-                <td>${transaction.channel}</td>
-                <td>${new Date(transaction.created_at).toLocaleString()}</td>
-                <td>
-                    <span class="status-badge status-${transaction.status.toLowerCase()}">${transaction.status}</span>
-                </td>
-            `;
-            tbody.appendChild(row);
-        });
-    }
-    
-    /**
-     * Add transaction to table
-     */
-    addTransactionToTable(transaction) {
-        const tbody = document.querySelector('#transactionsTable tbody');
-        if (!tbody) return;
-
-        const row = document.createElement('tr');
-        row.innerHTML = `
-            <td>${new Date(transaction.timestamp).toLocaleString()}</td>
-            <td>${transaction.customer_id.substring(0, 8)}...</td>
-            <td>${this.formatCurrency(transaction.amount, transaction.currency)}</td>
-            <td>${transaction.channel}</td>
-            <td><span class="badge bg-${this.getRiskLevel(transaction.risk_score)}">${transaction.risk_score}</span></td>
-            <td><span class="status-badge status-${transaction.status.toLowerCase()}">${transaction.status}</span></td>
-            <td>
-                <div class="btn-group btn-group-sm">
-                    <a href="/monitoring/transactions/${transaction.id}" class="btn btn-outline-primary">
-                        <i class="fas fa-eye"></i>
-                    </a>
-                </div>
-            </td>
-        `;
-        tbody.insertBefore(row, tbody.firstChild);
-
-        // Remove oldest row if table has too many rows (e.g., 100)
-        const rows = tbody.querySelectorAll('tr');
-        if (rows.length > 100) { // Assuming a max of 100 transactions
-            tbody.removeChild(rows[rows.length - 1]);
+        if (window.alertsDataTable) {
+            window.alertsDataTable.clear();
+            window.alertsDataTable.rows.add(alerts.map(alert => this.formatAlertRow(alert)));
+            window.alertsDataTable.draw();
         }
     }
-    
-    /**
-     * Add alert to table
-     */
-    addAlertToTable(alert) {
-        const tbody = document.querySelector('#alertsTable tbody');
-        if (!tbody) return;
-        
-        const row = document.createElement('tr');
-        row.innerHTML = `
-            <td>
-                <div class="d-flex align-items-center">
-                    <div class="risk-score risk-${this.getRiskLevel(alert.risk_score)}">
-                        ${(alert.risk_score * 100).toFixed(0)}
-                    </div>
-                    <div class="ms-2">
-                        <div class="fw-semibold">${alert.id}</div>
-                        <small class="text-muted">${new Date(alert.created_at).toLocaleString()}</small>
-                    </div>
+
+    formatAlertRow(alert) {
+        return [
+            `
+            <div class="d-flex align-items-center">
+                <div class="risk-score risk-${this.getRiskLevel(alert.risk_score)}">
+                    ${(alert.risk_score * 100).toFixed(0)}
                 </div>
-            </td>
-            <td>
-                <span class="badge bg-secondary">${alert.alert_type}</span>
-            </td>
-            <td>${alert.customer_id}</td>
-            <td>${this.formatCurrency(alert.transaction?.amount || 0)} ${alert.transaction?.currency || 'USD'}</td>
-            <td>
-                <span class="status-badge status-${alert.status.toLowerCase()}">${alert.status}</span>
-            </td>
-            <td>
-                <div class="btn-group btn-group-sm">
-                    <button class="btn btn-outline-primary view-alert-btn" data-alert-id="${alert.id}">
-                        <i class="fas fa-eye"></i>
-                    </button>
-                    <button class="btn btn-outline-success create-case-btn" data-alert-id="${alert.id}">
-                        <i class="fas fa-plus"></i>
-                    </button>
+                <div class="ms-2">
+                    <div class="fw-semibold">${alert.id}</div>
+                    <small class="text-muted">${new Date(alert.created_at).toLocaleString()}</small>
                 </div>
-            </td>
-        `;
-        
-        tbody.insertBefore(row, tbody.firstChild);
-        
-        // Remove oldest row if table has too many rows
-        const rows = tbody.querySelectorAll('tr');
-        if (rows.length > this.config.maxAlerts) {
-            tbody.removeChild(rows[rows.length - 1]);
-        }
+            </div>
+            `,
+            `<span class="badge bg-secondary">${alert.alert_type}</span>`,
+            alert.customer_id,
+            `${this.formatCurrency(alert.transaction?.amount || 0)} ${alert.transaction?.currency || 'USD'}`,
+            `<span class="status-badge status-${alert.status.toLowerCase()}">${alert.status}</span>`,
+            `
+            <div class="btn-group btn-group-sm">
+                <button class="btn btn-outline-primary view-alert-btn" data-alert-id="${alert.id}">
+                    <i class="fas fa-eye"></i>
+                </button>
+                <button class="btn btn-outline-success create-case-btn" data-alert-id="${alert.id}">
+                    <i class="fas fa-plus"></i>
+                </button>
+            </div>
+            `
+        ];
+    }
+
+    async initTransactionsTable() {
+        this.transactionsTable = $('#transactionsTable').DataTable({
+            "processing": true,
+            "serverSide": true,
+            "ajax": {
+                "url": "/api/monitoring/transactions",
+                "type": "GET",
+                "data": function (d) {
+                    d.search_term = $('#transactionSearchInput').val();
+                    d.transaction_type = $('#transactionTypeFilter').val();
+                    d.status = $('#transactionStatusFilter').val();
+                    d.date = $('#transactionDateFilter').val();
+                },
+                "headers": await this.getAuthHeaders()
+            },
+            "columns": [
+                { "data": "id" },
+                { "data": "customer_id" },
+                { "data": "transaction_type" },
+                { 
+                    "data": "amount",
+                    "render": function ( data, type, row ) {
+                        return `${row.currency} ${data.toFixed(2)}`;
+                    }
+                },
+                { "data": "status" },
+                { 
+                    "data": "created_at",
+                    "render": function ( data, type, row ) {
+                        return new Date(data).toLocaleString();
+                    }
+                },
+                {
+                    "data": "id",
+                    "render": function ( data, type, row ) {
+                        return `<a href="/monitoring/transactions/${data}" class="btn btn-sm btn-outline-primary">View</a>`;
+                    }
+                }
+            ],
+            "order": [[ 5, "desc" ]],
+            "pageLength": 10,
+            "responsive": true
+        });
     }
     
     /**
@@ -807,6 +779,9 @@ class AMLDashboard {
     async refreshDashboard() {
         console.log('Refreshing dashboard...');
         await this.loadInitialData();
+        if(this.transactionsTable) {
+            this.transactionsTable.ajax.reload();
+        }
         this.showNotification('Dashboard refreshed', 'success');
     }
     
@@ -888,7 +863,7 @@ class AMLDashboard {
      */
     async showAlertDetails(alertId) {
         try {
-            const response = await fetch(`/api/alerts/${alertId}`, { headers: this.getAuthHeaders() });
+            const response = await fetch(`/api/alerts/${alertId}`, { headers: await this.getAuthHeaders() });
             if (!response.ok) throw new Error('Failed to load alert details');
             
             const alert = await response.json();
@@ -965,7 +940,7 @@ class AMLDashboard {
      */
     async exportAlerts() {
         try {
-            const response = await fetch('/api/alerts/export', { headers: this.getAuthHeaders() });
+            const response = await fetch('/api/alerts/export', { headers: await this.getAuthHeaders() });
             if (!response.ok) throw new Error('Failed to export alerts');
             
             const blob = await response.blob();

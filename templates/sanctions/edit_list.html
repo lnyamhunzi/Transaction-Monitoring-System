@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Sanctions List Entry{% endblock %}
+
+{% block page_title %}Edit Sanctions List Entry{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-body">
+        <h5 class="card-title" id="entryTitle">Edit Sanctions List Entry</h5>
+        <form id="editSanctionsListForm">
+            <div class="mb-3">
+                <label for="listName" class="form-label">List Name</label>
+                <input type="text" class="form-control" id="listName" name="list_name" required>
+            </div>
+            <div class="mb-3">
+                <label for="entityName" class="form-label">Entity Name</label>
+                <input type="text" class="form-control" id="entityName" name="entity_name" required>
+            </div>
+            <div class="mb-3">
+                <label for="entityType" class="form-label">Entity Type</label>
+                <input type="text" class="form-control" id="entityType" name="entity_type">
+            </div>
+            <div class="mb-3">
+                <label for="nationality" class="form-label">Nationality</label>
+                <input type="text" class="form-control" id="nationality" name="nationality">
+            </div>
+            <div class="mb-3">
+                <label for="program" class="form-label">Program</label>
+                <input type="text" class="form-control" id="program" name="program">
+            </div>
+            <div class="mb-3">
+                <label for="remarks" class="form-label">Remarks</label>
+                <textarea class="form-control" id="remarks" name="remarks" rows="3"></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">Save Changes</button>
+            <a href="/sanctions/lists" class="btn btn-secondary">Cancel</a>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', async function() {
+        const listId = window.location.pathname.split('/').pop();
+        if (!listId) {
+            alert('Error: No list ID provided.');
+            return;
+        }
+
+        const form = document.getElementById('editSanctionsListForm');
+
+        // Fetch existing data and populate the form
+        try {
+            const response = await fetch(`/api/sanctions/lists/${listId}`, {
+                headers: {
+                    'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
+                }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                document.getElementById('listName').value = data.list_name;
+                document.getElementById('entityName').value = data.entity_name;
+                document.getElementById('entityType').value = data.entity_type || '';
+                document.getElementById('nationality').value = data.nationality || '';
+                document.getElementById('program').value = data.program || '';
+                document.getElementById('remarks').value = data.remarks || '';
+            } else {
+                const errorData = await response.json();
+                alert(`Error loading data: ${errorData.detail || response.statusText}`);
+            }
+        } catch (error) {
+            console.error('Error fetching sanctions list entry for edit:', error);
+            alert('An error occurred while loading the entry for editing.');
+        }
+
+        // Handle form submission for update
+        form.addEventListener('submit', async function(event) {
+            event.preventDefault();
+
+            const formData = new FormData(form);
+            const data = {};
+            formData.forEach((value, key) => (data[key] = value));
+
+            try {
+                const response = await fetch(`/api/sanctions/lists/${listId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                if (response.ok) {
+                    alert('Sanctions list entry updated successfully!');
+                    window.location.href = '/sanctions/lists';
+                } else {
+                    const errorData = await response.json();
+                    alert(`Error updating: ${errorData.detail || response.statusText}`);
+                }
+            } catch (error) {
+                console.error('Error updating sanctions list entry:', error);
+                alert('An error occurred while updating the entry.');
+            }
+        });
+    });
+</script>
+{% endblock %}

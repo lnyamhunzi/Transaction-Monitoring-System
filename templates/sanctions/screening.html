@@ -64,20 +64,47 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/js/utils.js"></script>
 <script>
+document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('singleScreeningForm').addEventListener('submit', async function(event) {
         event.preventDefault();
-        const name = document.getElementById('entityName').value;
-        const country = document.getElementById('entityCountry').value;
-        const response = await fetch('/api/sanctions/screen/single', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ name, country }),
-        });
-        const result = await response.json(); // Renamed to 'result' for clarity
-        displayResults([result]); // Pass the single result object in an array
+        console.log('Screening form submitted.');
+        try {
+            const name = document.getElementById('entityName').value;
+            const country = document.getElementById('entityCountry').value;
+            console.log(`Screening for: ${name}, ${country}`);
+
+            const token = getAuthToken();
+            console.log('Token:', token);
+            if (!token) {
+                alert('Authentication token not found. Please log in again.');
+                window.location.href = '/admin/login';
+                return;
+            }
+
+            const response = await fetch('/api/sanctions/screen/single', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ name, country }),
+            });
+            console.log('Response status:', response.status);
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`API request failed with status ${response.status}: ${errorText}`);
+            }
+
+            const result = await response.json();
+            console.log('API result:', result);
+            displayResults([result]);
+        } catch (error) {
+            console.error('An error occurred during screening:', error);
+            alert(`An error occurred during screening: ${error.message}`);
+        }
     });
 
     document.getElementById('bulkScreeningForm').addEventListener('submit', async function(event) {
@@ -85,9 +112,17 @@
         const fileInput = document.getElementById('bulkScreeningFile');
         const formData = new FormData();
         formData.append('file', fileInput.files[0]);
+        const token = getAuthToken();
+        if (!token) {
+            window.location.href = '/admin/login';
+            return;
+        }
 
         const response = await fetch('/api/sanctions/screen/bulk', {
             method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`
+            },
             body: formData,
         });
         const results = await response.json();
@@ -95,48 +130,57 @@
     });
 
     function displayResults(results) {
+        console.log('displayResults called with:', results);
         const resultsBody = document.getElementById('resultsBody');
-        resultsBody.innerHTML = '';
+        resultsBody.innerHTML = ''; // Clear existing data
+
+        if (!results || results.length === 0) {
+            console.log('No results or empty results array.');
+            resultsBody.innerHTML = '<tr><td colspan="5" class="text-center">No screening results found.</td></tr>';
+            return;
+        }
+
+        console.log('Processing results:', results);
         for (const result of results) {
-            const hasSanctionsOrPepMatch = result.sanctions_matches.length > 0 || result.pep_matches.length > 0;
-            const hasAdverseMedia = result.adverse_media_hits && result.adverse_media_hits.length > 0;
-            const hasMatch = hasSanctionsOrPepMatch || hasAdverseMedia;
-
-            let sanctionsPepDetails = '-';
-            if (hasSanctionsOrPepMatch) {
-                sanctionsPepDetails = '<ul>';
-                result.sanctions_matches.forEach(match => {
-                    sanctionsPepDetails += `<li>${match.matched_name} (${match.entity_type}, Score: ${match.similarity_score.toFixed(2)})</li>`;
-                });
-                result.pep_matches.forEach(match => {
-                    sanctionsPepDetails += `<li>${match.matched_name} (PEP, Score: ${match.similarity_score.toFixed(2)})</li>`;
-                });
-                sanctionsPepDetails += '</ul>';
-            }
-
-            let adverseMediaDetails = '-';
-            if (hasAdverseMedia) {
-                adverseMediaDetails = '<ul>';
-                result.adverse_media_hits.forEach(hit => {
-                    adverseMediaDetails += `<li>${hit}</li>`;
-                });
-                adverseMediaDetails += '</ul>';
-            }
-
+            console.log('Processing single result:', result);
             const row = document.createElement('tr');
-            row.innerHTML = `
-                <td>${result.name}</td>
-                <td>${result.country || ''}</td>
-                <td>
-                    <span class="badge bg-${hasMatch ? 'danger' : 'success'}">
-                        ${hasMatch ? 'Potential Match' : 'No Match'}
-                    </span>
-                </td>
-                <td>${sanctionsPepDetails}</td>
-                <td>${adverseMediaDetails}</td>
-            `;
+            const nameCell = document.createElement('td');
+            nameCell.textContent = result.name;
+            row.appendChild(nameCell);
+
+            const countryCell = document.createElement('td');
+            countryCell.textContent = result.country || '';
+            row.appendChild(countryCell);
+
+            const statusCell = document.createElement('td');
+            const hasMatch = (result.sanctions_matches && result.sanctions_matches.length > 0) || 
+                             (result.pep_matches && result.pep_matches.length > 0) ||
+                             (result.adverse_media_hits && result.adverse_media_hits.length > 0);
+            statusCell.innerHTML = `<span class="badge bg-${hasMatch ? 'danger' : 'success'}">${hasMatch ? 'Potential Match' : 'No Match'}</span>`;
+            row.appendChild(statusCell);
+
+            const detailsCell = document.createElement('td');
+            let details = '';
+            if (result.sanctions_matches && result.sanctions_matches.length > 0) {
+                details += 'Sanctions: ' + result.sanctions_matches.map(m => `${m.matched_name} (${m.entity_type})`).join(', ');
+            }
+            if (result.pep_matches && result.pep_matches.length > 0) {
+                details += ' PEP: ' + result.pep_matches.map(m => `${m.matched_name}`).join(', ');
+            }
+            detailsCell.textContent = details || '-';
+            row.appendChild(detailsCell);
+
+            const adverseMediaCell = document.createElement('td');
+            if (result.adverse_media_hits && result.adverse_media_hits.length > 0) {
+                adverseMediaCell.textContent = result.adverse_media_hits.join(', ');
+            } else {
+                adverseMediaCell.textContent = '-';
+            }
+            row.appendChild(adverseMediaCell);
+
             resultsBody.appendChild(row);
         }
     }
+});
 </script>
 {% endblock %}

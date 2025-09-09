@@ -135,6 +135,8 @@
     </div>
 </div>
 
+
+
 <!-- Recent Transactions -->
 <div class="row mb-4">
     <div class="col-md-12">
@@ -223,6 +225,7 @@
         <div class="card">
             <div class="card-header">
                 <ul class="nav nav-tabs card-header-tabs" id="adminTabs" role="tablist">
+                    {% if user.role == 'admin' %}
                     <li class="nav-item" role="presentation">
                         <button class="nav-link active" id="config-tab" data-bs-toggle="tab" data-bs-target="#config-pane" type="button" role="tab">
                             <i class="fas fa-cog me-2"></i>Configuration
@@ -233,6 +236,7 @@
                             <i class="fas fa-users me-2"></i>User Management
                         </button>
                     </li>
+                    {% endif %}
                     <li class="nav-item" role="presentation">
                         <button class="nav-link" id="ml-tab" data-bs-toggle="tab" data-bs-target="#ml-pane" type="button" role="tab">
                             <i class="fas fa-brain me-2"></i>ML Models
@@ -254,7 +258,7 @@
             <div class="card-body">
                 <div class="tab-content" id="adminTabContent">
                     <!-- Configuration Tab -->
-                    <div class="tab-pane fade show active" id="config-pane" role="tabpanel">
+                    <div class="tab-pane fade {% if user.role == 'admin' %}show active{% endif %}" id="config-pane" role="tabpanel">
                         <form id="configurationForm">
                             <h6 class="mb-3">Risk Thresholds</h6>
                             <div class="row mb-3">
@@ -375,7 +379,7 @@
                     </div>
                     
                     <!-- ML Models Tab -->
-                    <div class="tab-pane fade" id="ml-pane" role="tabpanel">
+                    <div class="tab-pane fade {% if user.role != 'admin' %}show active{% endif %}" id="ml-pane" role="tabpanel">
                         <div class="d-flex justify-content-between align-items-center mb-3">
                             <h6 class="mb-0">Machine Learning Models</h6>
                             <button class="btn btn-primary" id="updateModels">
@@ -391,7 +395,7 @@
                                     </div>
                                     <div class="card-body">
                                         <div class="model-status">
-                                            <div class="status-indicator">
+                                            <div class_="status-indicator">
                                                 <div class="status-dot status-healthy"></div>
                                                 <span>Active</span>
                                             </div>
@@ -505,6 +509,9 @@
                                             <button class="btn btn-secondary" id="exportLogs">
                                                 <i class="fas fa-file-export me-2"></i>Export System Logs
                                             </button>
+                                            <button class="btn btn-primary" id="createAdminSelfPostingTransaction">
+                                                <i class="fas fa-exchange-alt me-2"></i>Create Admin Self-Posting Transaction
+                                            </button>
                                         </div>
                                     </div>
                                 </div>
@@ -551,6 +558,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="/static/js/utils.js"></script>
 <script>
 $(document).ready(function() {
     var recentTransactionsTable = $('#recentTransactionsTable').DataTable({
@@ -666,9 +674,6 @@ $(document).ready(function() {
     });
 });
 </script>
-{% endblock %}
-
-{% block extra_scripts %}
 <!-- Admin Panel JavaScript -->
 <script src="/static/js/admin-panel.js"></script>
 

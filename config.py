@@ -31,7 +31,7 @@ class Settings:
     
     # Server Configuration
     HOST: str = os.getenv("HOST", "0.0.0.0")
-    PORT: int = int(os.getenv("PORT", "5000"))
+    PORT: int = int(os.getenv("PORT", "8090"))
     
     # Security Settings
     SECRET_KEY: str = os.getenv("SECRET_KEY", "a-very-secret-key-that-should-be-in-env-file")

@@ -49,7 +49,7 @@ $(document).ready(function() {
         "processing": true,
         "serverSide": true,
         "ajax": {
-            "url": "/api/monitoring/customers",
+            "url": "/api/staff/monitoring/customers",
             "type": "GET",
             "data": function (d) {
                 d.search_term = $('#customerSearchInput').val();
@@ -79,7 +79,7 @@ $(document).ready(function() {
             {
                 "data": "customer_id",
                 "render": function ( data, type, row ) {
-                    return `<a href="/customers/${data}/profile" class="btn btn-sm btn-outline-primary">View Profile</a>`;
+                    return `<a href="/staff/customers/${data}/profile" class="btn btn-sm btn-outline-primary">View Profile</a>`;
                 }
             }
         ]

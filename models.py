@@ -74,6 +74,7 @@ class Customer(Base):
     username = Column(String(255), unique=True, index=True)
     hashed_password = Column(String(512))
     last_login = Column(DateTime)
+    status = Column(String(255), default="active")
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -192,7 +193,7 @@ class Case(Base):
     __tablename__ = "cases"
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    alert_id = Column(String(36), ForeignKey("alerts.id"), nullable=False, unique=True)
+    alert_id = Column(String(36), ForeignKey("alerts.id"), nullable=True, unique=True)
     case_number = Column(String(255), unique=True, nullable=False)
     title = Column(String(255), nullable=False)
     description = Column(Text)
@@ -200,7 +201,7 @@ class Case(Base):
     priority = Column(String(255), default="MEDIUM")
     
     # Assignment
-    assigned_to = Column(String(255), nullable=False)
+    assigned_to = Column(String(255), nullable=True)
     supervisor = Column(String(255))
     
     # Investigation details

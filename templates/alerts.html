@@ -514,7 +514,7 @@ class AlertsManagement {
         try {
             this.showLoading(true);
             
-            const url = `/api/alerts/?limit=1000&${queryString}`;
+            const url = `/api/staff/monitoring/alerts/recent?limit=1000&${queryString}`;
             const response = await fetch(url, { headers: this.getAuthHeaders() });
             if (response.status === 401) { window.location.href = '/admin/login'; return; }
             if (!response.ok) throw new Error('Failed to load alerts');

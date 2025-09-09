@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+
+{% block title %}View Sanctions List Entry{% endblock %}
+
+{% block page_title %}View Sanctions List Entry{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-body">
+        <h5 class="card-title" id="entryTitle">Loading...</h5>
+        <div class="mb-3">
+            <strong>List Name:</strong> <span id="listName"></span>
+        </div>
+        <div class="mb-3">
+            <strong>Entity Name:</strong> <span id="entityName"></span>
+        </div>
+        <div class="mb-3">
+            <strong>Entity Type:</strong> <span id="entityType"></span>
+        </div>
+        <div class="mb-3">
+            <strong>Nationality:</strong> <span id="nationality"></span>
+        </div>
+        <div class="mb-3">
+            <strong>Program:</strong> <span id="program"></span>
+        </div>
+        <div class="mb-3">
+            <strong>Remarks:</strong> <span id="remarks"></span>
+        </div>
+        <div class="mb-3">
+            <strong>List Date:</strong> <span id="listDate"></span>
+        </div>
+        <div class="mb-3">
+            <strong>Created At:</strong> <span id="createdAt"></span>
+        </div>
+        <div class="mb-3">
+            <strong>Updated At:</strong> <span id="updatedAt"></span>
+        </div>
+        <a href="/sanctions/lists" class="btn btn-secondary">Back to List</a>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', async function() {
+        const listId = window.location.pathname.split('/').pop();
+        if (!listId) {
+            alert('Error: No list ID provided.');
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/sanctions/lists/${listId}`, {
+                headers: {
+                    'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
+                }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                document.getElementById('entryTitle').textContent = `Details for ${data.entity_name}`;
+                document.getElementById('listName').textContent = data.list_name;
+                document.getElementById('entityName').textContent = data.entity_name;
+                document.getElementById('entityType').textContent = data.entity_type || 'N/A';
+                document.getElementById('nationality').textContent = data.nationality || 'N/A';
+                document.getElementById('program').textContent = data.program || 'N/A';
+                document.getElementById('remarks').textContent = data.remarks || 'N/A';
+                document.getElementById('listDate').textContent = data.list_date ? new Date(data.list_date).toLocaleDateString() : 'N/A';
+                document.getElementById('createdAt').textContent = data.created_at ? new Date(data.created_at).toLocaleString() : 'N/A';
+                document.getElementById('updatedAt').textContent = data.updated_at ? new Date(data.updated_at).toLocaleString() : 'N/A';
+            } else {
+                const errorData = await response.json();
+                alert(`Error: ${errorData.detail || response.statusText}`);
+                document.getElementById('entryTitle').textContent = 'Error loading details.';
+            }
+        } catch (error) {
+            console.error('Error fetching sanctions list entry:', error);
+            alert('An error occurred while fetching the entry details.');
+            document.getElementById('entryTitle').textContent = 'Error loading details.';
+        }
+    });
+</script>
+{% endblock %}

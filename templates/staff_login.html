@@ -1,20 +1,20 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Admin Login</title>
+    <title>Staff Login</title>
     <style>
         body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f0f2f5; }
         .login-container { background-color: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; width: 300px; }
         h2 { margin-bottom: 20px; color: #333; }
         input[type="text"], input[type="password"] { width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
-        button { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; width: 100%; }
+        button { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor; font-size: 16px; width: 100%; }
         button:hover { background-color: #0056b3; }
         .error-message { color: red; margin-top: 10px; }
     </style>
 </head>
 <body>
     <div class="login-container">
-        <h2>Admin Login</h2>
+        <h2>Staff Login</h2>
         <form id="login-form">
             <input type="text" name="username" placeholder="Username" required autocomplete="username">
             <input type="password" name="password" placeholder="Password" required autocomplete="current-password">
@@ -32,15 +32,15 @@
             const errorMessage = document.getElementById('error-message');
 
             try {
-                const response = await fetch('/api/admin/token', {
+                const response = await fetch('/api/staff/token', {
                     method: 'POST',
                     body: formData
                 });
 
                 if (response.ok) {
                     const responseData = await response.json();
-                    localStorage.setItem('admin_token', responseData.access_token);
-                    window.location.href = responseData.redirect_url || '/admin';
+                    localStorage.setItem('staff_token', responseData.access_token);
+                    window.location.href = responseData.redirect_url || '/staff/dashboard';
                 } else {
                     const errorData = await response.json();
                     errorMessage.textContent = errorData.detail || 'Login failed. Please check your credentials.';

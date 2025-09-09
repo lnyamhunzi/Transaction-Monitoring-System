@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block title %}Edit PEP Entry{% endblock %}
+
+{% block page_title %}Edit PEP Entry{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-body">
+        <h5 class="card-title" id="entryTitle">Edit PEP Entry</h5>
+        <form id="editPEPForm">
+            <div class="mb-3">
+                <label for="full_name" class="form-label">Full Name</label>
+                <input type="text" class="form-control" id="full_name" name="full_name" required>
+            </div>
+            <div class="mb-3">
+                <label for="country" class="form-label">Country</label>
+                <input type="text" class="form-control" id="country" name="country">
+            </div>
+            <div class="mb-3">
+                <label for="position" class="form-label">Position</label>
+                <input type="text" class="form-control" id="position" name="position">
+            </div>
+            <div class="mb-3">
+                <label for="start_date" class="form-label">Start Date (YYYY-MM-DD)</label>
+                <input type="date" class="form-control" id="start_date" name="start_date">
+            </div>
+            <button type="submit" class="btn btn-primary">Save Changes</button>
+            <a href="/sanctions/pep" class="btn btn-secondary">Cancel</a>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', async function() {
+        const pepId = window.location.pathname.split('/').pop();
+        if (!pepId) {
+            alert('Error: No PEP ID provided.');
+            return;
+        }
+
+        const form = document.getElementById('editPEPForm');
+
+        // Fetch existing data and populate the form
+        try {
+            const response = await fetch(`/api/pep/lists/${pepId}`, {
+                headers: {
+                    'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
+                }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                document.getElementById('full_name').value = data.full_name;
+                document.getElementById('country').value = data.country || '';
+                document.getElementById('position').value = data.position || '';
+                if (data.start_date) {
+                    document.getElementById('start_date').value = new Date(data.start_date).toISOString().split('T')[0];
+                }
+            } else {
+                const errorData = await response.json();
+                alert(`Error loading data: ${errorData.detail || response.statusText}`);
+            }
+        } catch (error) {
+            console.error('Error fetching PEP entry for edit:', error);
+            alert('An error occurred while loading the entry for editing.');
+        }
+
+        // Handle form submission for update
+        form.addEventListener('submit', async function(event) {
+            event.preventDefault();
+
+            const formData = new FormData(form);
+            const data = {};
+            formData.forEach((value, key) => {
+                if (key === 'start_date') {
+                    data[key] = value ? new Date(value).toISOString() : null;
+                } else {
+                    data[key] = value;
+                }
+            });
+
+            try {
+                const response = await fetch(`/api/pep/lists/${pepId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                if (response.ok) {
+                    alert('PEP entry updated successfully!');
+                    window.location.href = '/sanctions/pep';
+                } else {
+                    const errorData = await response.json();
+                    alert(`Error updating: ${errorData.detail || response.statusText}`);
+                }
+            } catch (error) {
+                console.error('Error updating PEP entry:', error);
+                alert('An error occurred while updating the entry.');
+            }
+        });
+    });
+</script>
+{% endblock %}

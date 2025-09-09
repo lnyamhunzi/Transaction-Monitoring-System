@@ -98,7 +98,7 @@
                 </div>
                 
                 <!-- Custom Date Range -->
-                <div class="row" id="customReportRange" style="display: none;">
+                <div class="row mt-3" id="customReportRange" style="display: none;">
                     <div class="col-md-3">
                         <div class="form-group">
                             <label class="form-label">Start Date</label>
@@ -601,7 +601,6 @@
 class ReportsManagement {
     constructor() {
         this.charts = {};
-        this.reportData = {};
         this.init();
     }
 
@@ -616,24 +615,24 @@ class ReportsManagement {
     async init() {
         this.setupEventListeners();
         this.initializeCharts();
-        await this.loadReportData();
-        this.updateDashboard();
+        this.updateReports(); // Load initial data
     }
     
     setupEventListeners() {
         // Filter change handlers
-        ['reportPeriod', 'reportType', 'riskLevelFilter', 'currencyFilter'].forEach(id => {
+        const filterIds = ['reportPeriod', 'reportType', 'riskLevelFilter', 'currencyFilter', 'reportStartDate', 'reportEndDate'];
+        filterIds.forEach(id => {
             document.getElementById(id).addEventListener('change', () => this.updateReports());
         });
         
         // Date range handler
         document.getElementById('reportPeriod').addEventListener('change', (e) => {
             const customRange = document.getElementById('customReportRange');
-            customRange.style.display = e.target.value === 'custom' ? 'block' : 'none';
+            customRange.style.display = e.target.value === 'custom' ? 'flex' : 'none';
         });
         
         // Button handlers
-        document.getElementById('refreshReports').addEventListener('click', () => this.loadReportData());
+        document.getElementById('refreshReports').addEventListener('click', () => this.updateReports());
         document.getElementById('generateSAR').addEventListener('click', () => this.showGenerateReportModal('SAR'));
         document.getElementById('generateCTR').addEventListener('click', () => this.showGenerateReportModal('CTR'));
         document.getElementById('generateManagementReport').addEventListener('click', () => this.showGenerateReportModal('MANAGEMENT'));
@@ -647,17 +646,35 @@ class ReportsManagement {
         tabElements.forEach(tab => {
             tab.addEventListener('shown.bs.tab', (event) => {
                 const targetPane = event.target.getAttribute('data-bs-target');
-                this.loadTabData(targetPane.replace('#', '').replace('-', '_'));
+                this.loadTabData(targetPane.replace('#', '').replace('-report', '_report'));
             });
         });
     }
+
+    getFilters() {
+        const period = document.getElementById('reportPeriod').value;
+        const filters = {
+            report_period: period,
+            report_type: document.getElementById('reportType').value,
+            risk_level: document.getElementById('riskLevelFilter').value,
+            currency: document.getElementById('currencyFilter').value,
+        };
+
+        if (period === 'custom') {
+            filters.start_date = document.getElementById('reportStartDate').value;
+            filters.end_date = document.getElementById('reportEndDate').value;
+        }
+        return filters;
+    }
     
-    async loadReportData() {
+    async loadReportData(filters) {
         try {
             this.showLoading(true);
             
+            const queryParams = new URLSearchParams(filters).toString();
+            
             // Load executive summary
-            const summaryResponse = await fetch('/api/reports/executive-summary', { headers: this.getAuthHeaders() });
+            const summaryResponse = await fetch(`/api/reports/executive-summary?${queryParams}`, { headers: this.getAuthHeaders() });
             if (summaryResponse.status === 401) { window.location.href = '/admin/login'; return; }
             if (summaryResponse.ok) {
                 const summary = await summaryResponse.json();
@@ -665,15 +682,19 @@ class ReportsManagement {
             }
             
             // Load chart data
-            const chartsResponse = await fetch('/api/reports/charts-data', { headers: this.getAuthHeaders() });
+            const chartsResponse = await fetch(`/api/reports/charts-data?${queryParams}`, { headers: this.getAuthHeaders() });
             if (chartsResponse.status === 401) { window.location.href = '/admin/login'; return; }
             if (chartsResponse.ok) {
                 const chartsData = await chartsResponse.json();
                 this.updateCharts(chartsData);
             }
             
-            // Load detailed report data
-            await this.loadTabData('alerts_report');
+            // Load data for the active tab
+            const activeTab = document.querySelector('#reportTabs .nav-link.active');
+            if (activeTab) {
+                const tabName = activeTab.getAttribute('data-bs-target').replace('#', '').replace('-report', '_report');
+                this.loadTabData(tabName, filters);
+            }
             
         } catch (error) {
             console.error('Error loading report data:', error);
@@ -750,91 +771,7 @@ class ReportsManagement {
                         beginAtZero: true,
                         ticks: {
                             callback: function(value) {
-                                return '
-
-<style>
-/* Reports Specific Styles */
-.summary-metric {
-    text-align: center;
-    padding: 1rem;
-    background-color: #f8f9fa;
-    border-radius: 0.375rem;
-    border: 1px solid #dee2e6;
-}
-
-.summary-metric .metric-value {
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: #1e3a5f;
-    margin-bottom: 0.25rem;
-}
-
-.summary-metric .metric-label {
-    font-size: 0.75rem;
-    color: #6c757d;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    font-weight: 600;
-    margin-bottom: 0.25rem;
-}
-
-.summary-metric .metric-change {
-    font-size: 0.875rem;
-    font-weight: 600;
-}
-
-.compliance-metrics {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-}
-
-.compliance-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.compliance-label {
-    font-weight: 600;
-    margin-right: 1rem;
-}
-
-.compliance-value {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex: 1;
-}
-
-.compliance-value .progress {
-    flex: 1;
-    height: 0.5rem;
-}
-
-.chart-container {
-    position: relative;
-    height: 300px;
-}
-
-@media (max-width: 768px) {
-    .summary-metric {
-        margin-bottom: 1rem;
-    }
-    
-    .compliance-item {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 0.5rem;
-    }
-    
-    .compliance-value {
-        width: 100%;
-    }
-}
-</style>
-{% endblock %}
- + value.toLocaleString();
+                                return '$' + value.toLocaleString();
                             }
                         }
                     }
@@ -1006,9 +943,10 @@ class ReportsManagement {
         }
     }
     
-    async loadTabData(tabName) {
+    async loadTabData(tabName, filters) {
         try {
-            const response = await fetch(`/api/reports/${tabName}`, { headers: this.getAuthHeaders() });
+            const queryParams = new URLSearchParams(filters).toString();
+            const response = await fetch(`/api/reports/${tabName}?${queryParams}`, { headers: this.getAuthHeaders() });
             if (response.status === 401) { window.location.href = '/admin/login'; return; }
             if (!response.ok) throw new Error(`Failed to load ${tabName} data`);
             
@@ -1213,8 +1151,8 @@ class ReportsManagement {
     }
     
     updateReports() {
-        // Reload data based on current filters
-        this.loadReportData();
+        const filters = this.getFilters();
+        this.loadReportData(filters);
     }
     
     showLoading(show) {

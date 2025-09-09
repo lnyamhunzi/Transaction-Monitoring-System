@@ -248,8 +248,8 @@
 
 <!-- Create Case Modal -->
 <div class="modal fade" id="createCaseModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content" style="max-height: calc(100vh - 50px); overflow-y: auto;">
             <div class="modal-header">
                 <h5 class="modal-title">Create New Case</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -414,6 +414,7 @@ class CaseManagement {
         await this.loadCases();
         await this.loadCaseMetrics();
         this.initCaseDistributionChart();
+        await this.loadUsersForAssignment(); // Add this line
     }
     
     setupDataTable() {
@@ -484,9 +485,10 @@ class CaseManagement {
         });
     }
     
-    async loadCases() {
+    async loadCases(queryString = '') {
         try {
-            const response = await fetch('/api/cases/', { headers: this.getAuthHeaders() });
+            const url = `/api/cases/?limit=1000&${queryString}`;
+            const response = await fetch(url, { headers: this.getAuthHeaders() });
             if (response.status === 401) { window.location.href = '/admin/login'; return; }
             if (!response.ok) throw new Error('Failed to load cases');
             
@@ -614,6 +616,39 @@ class CaseManagement {
         }
     }
     
+    async loadUsersForAssignment() {
+        try {
+            const response = await fetch('/api/admin/users', { headers: this.getAuthHeaders() });
+            if (response.status === 401) { window.location.href = '/admin/login'; return; }
+            if (!response.ok) throw new Error('Failed to load users');
+            
+            const users = await response.json();
+            
+            const createCaseAssignedTo = document.querySelector('#createCaseModal [name="assigned_to"]');
+            const updateCaseAssignedTo = document.querySelector('#updateCaseModal [name="assigned_to"]');
+
+            // Clear existing options except the first one ("Select Assignee")
+            createCaseAssignedTo.innerHTML = '<option value="">Select Assignee</option>';
+            updateCaseAssignedTo.innerHTML = '<option value="">Select Assignee</option>';
+
+            users.forEach(user => {
+                const option = document.createElement('option');
+                option.value = user.username;
+                option.textContent = user.full_name;
+                createCaseAssignedTo.appendChild(option);
+
+                const option2 = document.createElement('option');
+                option2.value = user.username;
+                option2.textContent = user.full_name;
+                updateCaseAssignedTo.appendChild(option2);
+            });
+            
+        } catch (error) {
+            console.error('Error loading users for assignment:', error);
+            AMLBase.showToast('Failed to load users for assignment', 'danger');
+        }
+    }
+    
     showCreateCaseModal(manual = false, alertId = null) {
         const modal = new bootstrap.Modal(document.getElementById('createCaseModal'));
         const form = document.getElementById('createCaseForm');
@@ -656,8 +691,8 @@ class CaseManagement {
             });
             if (response.status === 401) { window.location.href = '/admin/login'; return; }
             if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || 'Failed to create case');
+                const errorText = await response.text(); // Get raw text
+                throw new Error(errorText || 'Failed to create case'); // Use raw text as error message
             }
             
             AMLBase.showToast('Case created successfully', 'success');
@@ -766,18 +801,16 @@ class CaseManagement {
     }
     
     applyFilters() {
-        // Implementation for filtering cases based on selected criteria
-        const statusFilter = document.getElementById('caseStatusFilter').value;
-        const priorityFilter = document.getElementById('casePriorityFilter').value;
-        const assigneeFilter = document.getElementById('assigneeFilter').value;
-        const slaFilter = document.getElementById('slaFilter').value;
-        
-        // Apply filters to DataTable
-        this.casesTable
-            .column(4).search(statusFilter)
-            .column(3).search(priorityFilter)
-            .column(5).search(assigneeFilter === 'me' ? 'current_user' : assigneeFilter)
-            .draw();
+        const status = document.getElementById('caseStatusFilter').value;
+        const priority = document.getElementById('casePriorityFilter').value;
+        const assigned_to = document.getElementById('assigneeFilter').value;
+
+        const params = new URLSearchParams();
+        if (status) params.append('status', status);
+        if (priority) params.append('priority', priority);
+        if (assigned_to) params.append('assigned_to', assigned_to);
+
+        this.loadCases(params.toString());
     }
     
     async exportCases() {

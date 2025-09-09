@@ -63,7 +63,7 @@ $(document).ready(function() {
         "processing": true,
         "serverSide": true,
         "ajax": {
-            "url": "/api/monitoring/transactions",
+            "url": "/api/staff/monitoring/transactions",
             "type": "GET",
             "data": function (d) {
                 d.search_term = $('#transactionSearchInput').val();
@@ -92,7 +92,7 @@ $(document).ready(function() {
             {
                 "data": "id",
                 "render": function ( data, type, row ) {
-                    return `<a href="/monitoring/transactions/${data}" class="btn btn-sm btn-outline-primary">View</a>`;
+                    return `<a href="/staff/monitoring/transactions/${data}" class="btn btn-sm btn-outline-primary">View</a>`;
                 }
             }
         ]

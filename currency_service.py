@@ -126,22 +126,26 @@ class CurrencyService:
     async def fetch_rate_from_api(self, from_currency: str, to_currency: str) -> Optional[float]:
         """Fetch exchange rate from external API"""
         try:
-            # Use different approach based on base currency
-            if from_currency == self.base_currency:
-                url = f"{self.api_url}/{from_currency}"
-                response = requests.get(url, timeout=10)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    rates = data.get('rates', {})
-                    return rates.get(to_currency)
-            else:
-                # Get rate via USD
-                usd_rate_from = await self.fetch_rate_from_api(from_currency, 'USD')
-                usd_rate_to = await self.fetch_rate_from_api('USD', to_currency)
-                
-                if usd_rate_from and usd_rate_to:
-                    return usd_rate_to / usd_rate_from
+            # Always fetch rates against the base currency (USD)
+            url = f"{self.api_url}/{self.base_currency}"
+            response = requests.get(url, timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                rates = data.get("rates", {})
+
+                if from_currency == to_currency:
+                    return 1.0
+
+                # Rate for 1 unit of base currency (USD)
+                from_rate = rates.get(from_currency) if from_currency != self.base_currency else 1.0
+                to_rate = rates.get(to_currency) if to_currency != self.base_currency else 1.0
+
+                if from_rate and to_rate:
+                    # We have from_currency/USD and to_currency/USD.
+                    # We want to_currency/from_currency.
+                    # (to_currency/USD) / (from_currency/USD)
+                    return to_rate / from_rate
             
             return None
             

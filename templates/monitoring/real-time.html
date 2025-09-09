@@ -14,7 +14,14 @@
     <div class="col-md-12">
         <div class="card">
             <div class="card-body">
-                <h5 class="card-title">Filters & Controls</h5>
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h5 class="card-title mb-0">Filters & Controls</h5>
+                    <div>
+                        <button class="btn btn-outline-secondary me-2" id="pauseMonitoring"><i class="fas fa-pause"></i> Pause</button>
+                        <button class="btn btn-outline-danger me-2" id="clearStream"><i class="fas fa-trash"></i> Clear</button>
+                        <button class="btn btn-outline-primary" id="exportRealTimeData"><i class="fas fa-download"></i> Export</button>
+                    </div>
+                </div>
                 <div class="row g-3 align-items-center">
                     <div class="col-auto">
                         <label for="riskLevelFilter" class="col-form-label">Risk Level:</label>
@@ -48,11 +55,6 @@
                             <option value="4h">Last 4 Hours</option>
                             <option value="24h">Last 24 Hours</option>
                         </select>
-                    </div>
-                    <div class="col-md-4 text-end">
-                        <button class="btn btn-outline-secondary me-2" id="pauseMonitoring"><i class="fas fa-pause"></i> Pause</button>
-                        <button class="btn btn-outline-danger me-2" id="clearStream"><i class="fas fa-trash"></i> Clear</button>
-                        <button class="btn btn-outline-primary" id="exportRealTimeData"><i class="fas fa-download"></i> Export</button>
                     </div>
                 </div>
             </div>

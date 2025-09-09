@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import and_, or_, desc, func, case
+from sqlalchemy import and_, or_, desc, func, case, asc
 import uvicorn
 from passlib.context import CryptContext
 from jose import JWTError, jwt
@@ -30,6 +30,7 @@ from sanctions_screening import SanctionsScreeningEngine
 from notification_service import NotificationService
 from currency_service import CurrencyService
 from case_management import CaseManagementService
+from aml_processing import process_transaction_controls # New import
 from config import settings
 
 
@@ -141,6 +142,80 @@ async def lifespan(app: FastAPI):
             db.commit()
             db.refresh(admin_user)
             logger.info("Default admin user password ensured.")
+        
+        # Populate PEPList
+        pep_list = [
+            {"full_name": "Emmerson Mnangagwa", "country": "Zimbabwe", "position": "President"},
+            {"full_name": "Constantino Chiwenga", "country": "Zimbabwe", "position": "Vice President"},
+            {"full_name": "Donald Trump", "country": "USA", "position": "Former President"},
+            {"full_name": "Joe Biden", "country": "USA", "position": "President"},
+            {"full_name": "Theresa May", "country": "UK", "position": "Former Prime Minister"},
+            {"full_name": "Angela Merkel", "country": "Germany", "position": "Former Chancellor"},
+            {"full_name": "Xi Jinping", "country": "China", "position": "President"},
+        ]
+        for pep_data in pep_list:
+            pep_exists = db.query(PEPList).filter(PEPList.full_name == pep_data["full_name"]).first()
+            if not pep_exists:
+                new_pep = PEPList(**pep_data)
+                db.add(new_pep)
+        
+        # Populate SanctionsList
+        sanctions_list = [
+            {"entity_name": "Al-Qaeda", "list_name": "UN Sanctions", "entity_type": "Organization"},
+            {"entity_name": "Islamic State of Iraq and the Levant (ISIL)", "list_name": "UN Sanctions", "entity_type": "Organization"},
+        ]
+        for sanction_data in sanctions_list:
+            sanction_exists = db.query(SanctionsList).filter(SanctionsList.entity_name == sanction_data["entity_name"]).first()
+            if not sanction_exists:
+                new_sanction = SanctionsList(**sanction_data)
+                db.add(new_sanction)
+        
+        # Ensure admin user also has a customer account for testing Control 1
+        admin_customer_id = admin_user.username # Use admin's username as customer_id
+        admin_customer = db.query(Customer).filter(Customer.username == admin_customer_id).first()
+        if not admin_customer:
+            logger.info(f"Creating customer account for admin user: {admin_customer_id}")
+            new_customer = Customer(
+                id=str(uuid.uuid4()),
+                customer_id=admin_customer_id,
+                username=admin_customer_id,
+                hashed_password=admin_user.hashed_password, # Use admin's hashed password
+                full_name=admin_user.full_name,
+                email=admin_user.email,
+                account_opening_date=datetime.now(),
+                risk_rating="LOW" # Default risk rating
+            )
+            db.add(new_customer)
+            db.commit()
+            db.refresh(new_customer)
+            logger.info(f"Customer account {admin_customer_id} created for admin user.")
+
+            # Create a default account for this new customer
+            account = Account(
+                id=str(uuid.uuid4()),
+                account_number=f"ACC{random.randint(100000000, 999999999)}",
+                customer_id=admin_customer_id,
+                account_type="SAVINGS",
+                currency="USD",
+                balance=1000000.0,  # Give a high balance for testing
+                status="ACTIVE",
+                opening_date=datetime.now(),
+            )
+            db.add(account)
+            db.commit()
+            logger.info(f"Default account created for admin customer {admin_customer_id}.")
+        else:
+            logger.info(f"Customer account for admin user {admin_customer_id} already exists.")
+            # Ensure the password is in sync if admin_user.hashed_password was updated
+            if admin_customer.hashed_password != admin_user.hashed_password:
+                admin_customer.hashed_password = admin_user.hashed_password
+                db.commit()
+                db.refresh(admin_customer)
+                logger.info("Admin customer password synced with admin user password.")
+
+        
+
+        db.commit()
         db.close()
 
     except Exception as e:
@@ -193,7 +268,7 @@ def format_currency(amount: float, currency: str = "USD") -> str:
         return f"{currency} {amount:,.2f}"
 
 templates.env.filters['risklevel'] = risklevel
-templates.env.filters['format_currency'] = format_currency
+templates.env.globals['format_currency'] = format_currency
 
 # --- Security ---
 
@@ -202,6 +277,7 @@ pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 # Security Schemes
 admin_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/admin/token")
+staff_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/staff/token")
 
 
 # Pydantic models
@@ -241,6 +317,9 @@ class AlertResponse(BaseModel):
     transaction_id: Optional[str] = None
     customer_id: Optional[str] = None
     description: str
+    # Add transaction details
+    transaction_amount: Optional[float] = None
+    transaction_currency: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -274,12 +353,47 @@ class BulkAlertAction(BaseModel):
 class AssignAlert(BaseModel):
     user_id: str
 
+class ReportFilters(BaseModel):
+    report_period: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    report_type: Optional[str] = None
+    risk_level: Optional[str] = None
+    currency: Optional[str] = None
+
+class ConfigurationUpdate(BaseModel):
+    risk_threshold_low: float
+    risk_threshold_medium: float
+    risk_threshold_high: float
+    email_notifications_enabled: bool
+    sms_notifications_enabled: bool
+    alert_retention_days: int
+    ml_scoring_enabled: bool
+    anomaly_threshold: float
+    model_retrain_interval_days: int
+    limit_usd_low: int
+    limit_usd_medium: int
+    limit_usd_high: int
+
+class TransactionStatusUpdate(BaseModel):
+    status: str
+
+class CreateCaseRequest(BaseModel):
+    alert_id: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    priority: str = Field("MEDIUM") # Default value
+    assigned_to: Optional[str] = None
+    investigation_notes: Optional[str] = None
+    target_completion_date: Optional[datetime] = None # Use datetime type
+
 # --- Utility Functions ---
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
 def get_password_hash(password):
     return pwd_context.hash(password)
+
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
@@ -311,6 +425,12 @@ async def get_current_user_dependency(token: str = Depends(admin_oauth2_scheme),
     user = db.query(User).filter(User.username == token_data.username).first()
     if user is None:
         raise credentials_exception
+    # Allow admin and aml_analyst roles to access this dependency
+    if user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to perform this action",
+        )
     return user
 
 async def get_optional_user(request: Request, db: Session = Depends(get_db)):
@@ -426,6 +546,55 @@ async def get_current_user_from_cookie(request: Request, db: Session = Depends(g
         logger.error(f"Unexpected error in get_current_user_from_cookie: {e}")
         raise HTTPException(status_code=500, detail="Internal server error during authentication")
 
+async def get_current_staff_user(request: Request, db: Session = Depends(get_db)):
+    logger.info("Entering get_current_staff_user")
+    cookie_token = request.cookies.get("staff_token")
+    auth_header = request.headers.get("Authorization")
+    header_token = None
+    if auth_header and auth_header.startswith("Bearer "): header_token = auth_header.split(" ")[1]
+    auth_token = header_token if header_token else cookie_token
+
+    if not auth_token: raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        payload = jwt.decode(auth_token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None: raise HTTPException(status_code=401, detail="Could not validate credentials")
+
+        user = db.query(User).filter(User.username == username).first()
+        if user is None: raise HTTPException(status_code=401, detail="Could not validate credentials")
+        
+        # Check if the user has a staff role
+        staff_roles = ["admin", "compliance_officer", "aml_analyst", "supervisor"]
+        if user.role not in staff_roles:
+            raise HTTPException(status_code=403, detail="Not authorized to access staff portal")
+
+        return user
+
+    except JWTError as e:
+        logger.error(f"JWTError during token decoding in get_current_staff_user: {e}")
+        raise HTTPException(status_code=401, detail="Could not validate credentials")
+    except Exception as e:
+        logger.error(f"Unexpected error in get_current_staff_user: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error during authentication")
+
+async def get_report_filters(
+    report_period: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    report_type: Optional[str] = None,
+    risk_level: Optional[str] = None,
+    currency: Optional[str] = None,
+) -> ReportFilters:
+    return ReportFilters(
+        report_period=report_period,
+        start_date=start_date,
+        end_date=end_date,
+        report_type=report_type,
+        risk_level=risk_level,
+        currency=currency,
+    )
+
 
 # --- Frontend Routes ---
 
@@ -437,6 +606,7 @@ async def admin_login_page(request: Request):
 async def dashboard(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
     if isinstance(current_user, RedirectResponse):
         return current_user
+    
     users = db.query(User).all()
     return templates.TemplateResponse("dashboard.html", {"request": request, "users": users, "user": current_user})
 
@@ -445,33 +615,11 @@ async def admin_panel(request: Request, db: Session = Depends(get_db)):
     current_user = await get_current_user_from_cookie(request, db=db)
     if isinstance(current_user, RedirectResponse):
         return current_user
-
-    # Fetch recent transactions and alerts from the database
-    recent_transactions_db = db.query(Transaction).order_by(Transaction.created_at.desc()).limit(10).all()
     
-    recent_transactions = []
-    for t in recent_transactions_db:
-        recent_transactions.append({
-            "id": t.id,
-            "customer_id": t.customer_id,
-            "amount": t.amount,
-            "currency": t.currency,
-            "transaction_type": t.transaction_type,
-            "channel": t.channel,
-            "risk_score": float(t.risk_score) if t.risk_score is not None else 0.0, # Ensure float, default to 0.0
-            "status": t.status.value if hasattr(t.status, 'value') else str(t.status),
-            "created_at": t.created_at.strftime('%Y-%m-%d %H:%M') if t.created_at else "Invalid Date" # Format date here
-        })
-
-    alerts = db.query(Alert).filter(Alert.status == AlertStatus.OPEN).all()
-
-    return templates.TemplateResponse("admin.html", {
-        "request": request,
-        "title": "Admin Dashboard",
-        "recent_transactions": recent_transactions,
-        "alerts": alerts,
-        "user": current_user
-    })
+    # Fetch recent alerts
+    recent_alerts = db.query(Alert).order_by(desc(Alert.created_at)).limit(10).all() # Limit to 10 for display
+    
+    return templates.TemplateResponse("admin.html", {"request": request, "user": current_user, "alerts": recent_alerts})
 
 @app.get("/admin/profile", response_class=HTMLResponse)
 async def admin_profile_page(request: Request, current_user: User = Depends(get_current_user_from_cookie)):
@@ -496,6 +644,14 @@ async def reports_view(request: Request, current_user: User = Depends(get_curren
     if isinstance(current_user, RedirectResponse):
         return current_user
     return templates.TemplateResponse("reports.html", {"request": request, "user": current_user})
+
+
+
+
+
+
+
+
 
 # --- Customer Portal Frontend Routes ---
 
@@ -586,7 +742,7 @@ async def screen_single_entity(screening_request: ScreeningRequest, db: Session 
         "name": screening_request.name,
         "country": screening_request.country,
         "sanctions_matches": screening_results.get("matches", []),
-        "pep_matches": [match for match in screening_results.get("matches", []) if match.get("entity_type") == "PEP"], # Filter PEP matches
+        "pep_matches": screening_results.get("pep_matches", []),
         "adverse_media_hits": screening_results.get("adverse_media_hits", []),
         "matched": screening_results.get("matched", False),
         "risk_score": screening_results.get("risk_score", 0.0),
@@ -601,43 +757,361 @@ async def screen_bulk_entities(file: UploadFile = File(...), db: Session = Depen
         contents = await file.read()
         decoded_content = contents.decode('utf-8').splitlines()
         for line in decoded_content:
+            line = line.strip()
+            if not line:
+                continue  # Skip empty lines
+
             parts = line.split(',')
-            if len(parts) >= 1:
-                name = parts[0]
-                country = parts[1] if len(parts) > 1 else None
-                logger.info(f"Processing bulk entry - Name: {name}, Country: {country}")
-                
-                # Construct dummy transaction_data for screen_transaction
-                transaction_data = {
-                    "customer_id": "bulk_entity_screening", # Dummy ID
-                    "counterparty_name": name,
-                    "counterparty_country": country, # Pass country for screening
-                    "counterparty_bank": None,
-                    "amount": 0,
-                    "currency": "USD",
-                    "channel": "BulkScreening"
-                }
-                logger.info(f"Constructed transaction_data for bulk screening: {transaction_data}")
-                
-                screening_results = await sanctions_engine.screen_transaction(transaction_data, db)
-                logger.info(f"Sanctions engine returned for bulk entry: {screening_results}")
-                
-                results.append({
-                    "name": name,
-                    "country": country,
-                    "sanctions_matches": screening_results.get("matches", []),
-                    "pep_matches": [match for match in screening_results.get("matches", []) if match.get("entity_type") == "PEP"],
-                    "adverse_media_hits": screening_results.get("adverse_media_hits", []),
-                    "matched": screening_results.get("matched", False),
-                    "risk_score": screening_results.get("risk_score", 0.0),
-                    "details": screening_results.get("details", "")
-                })
+            name = parts[0].strip()
+            if not name:
+                continue # Skip lines with no name
+
+            country = parts[1].strip() if len(parts) > 1 else None
+            
+            logger.info(f"Processing bulk entry - Name: {name}, Country: {country}")
+            
+            # Construct dummy transaction_data for screen_transaction
+            transaction_data = {
+                "customer_id": "bulk_entity_screening", # Dummy ID
+                "counterparty_name": name,
+                "counterparty_country": country, # Pass country for screening
+                "counterparty_bank": None,
+                "amount": 0,
+                "currency": "USD",
+                "channel": "BulkScreening"
+            }
+            logger.info(f"Constructed transaction_data for bulk screening: {transaction_data}")
+            
+            screening_results = await sanctions_engine.screen_transaction(transaction_data, db)
+            logger.info(f"Sanctions engine returned for bulk entry: {screening_results}")
+            
+            results.append({
+                "name": name,
+                "country": country,
+                "sanctions_matches": screening_results.get("matches", []),
+                "pep_matches": screening_results.get("pep_matches", []),
+                "adverse_media_hits": screening_results.get("adverse_media_hits", []),
+                "matched": screening_results.get("matched", False),
+                "risk_score": screening_results.get("risk_score", 0.0),
+                "details": screening_results.get("details", "")
+            })
     except Exception as e:
         logger.error(f"Error during bulk screening: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to process file: {e}")
     logger.info(f"Bulk screening completed. Total results: {len(results)}")
     return results
 
+@app.get("/api/sanctions/lists")
+async def get_sanctions_lists(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+
+    params = request.query_params
+
+    draw = int(params.get("draw", 1))
+    start = int(params.get("start", 0))
+    length = int(params.get("length", 10))
+    search_value = params.get("search[value]", "")
+
+    query = db.query(SanctionsList)
+
+    # Apply search filter
+    if search_value:
+        query = query.filter(
+            or_(
+                SanctionsList.entity_name.ilike(f"%{search_value}%"),
+                SanctionsList.list_name.ilike(f"%{search_value}%"),
+                SanctionsList.entity_type.ilike(f"%{search_value}%"),
+                SanctionsList.nationality.ilike(f"%{search_value}%"),
+            )
+        )
+
+    # Total records before pagination
+    total_records = query.count()
+
+    # Apply ordering
+    order_column_index = int(params.get("order[0][column]", 0))
+    order_direction = params.get("order[0][dir]", "asc")
+    order_column_name = params.get(f"columns[{order_column_index}][data]")
+
+    if order_column_name and hasattr(SanctionsList, order_column_name):
+        if order_direction == "asc":
+            query = query.order_by(asc(getattr(SanctionsList, order_column_name)))
+        else:
+            query = query.order_by(desc(getattr(SanctionsList, order_column_name)))
+    else: # Default ordering if column name is invalid or not provided
+        query = query.order_by(desc(SanctionsList.created_at))
+
+    # Apply pagination
+    query = query.offset(start).limit(length)
+
+    logger.info(f"Executing query for sanctions lists with start={start}, length={length}, search_value='{search_value}'")
+    sanctions_lists = query.all()
+    logger.info(f"Fetched {len(sanctions_lists)} sanctions list entries.")
+
+    # Prepare data for DataTables
+    data = []
+    for item in sanctions_lists:
+        data.append({
+            "id": str(item.id),
+            "list_name": item.list_name,
+            "entity_name": item.entity_name,
+            "entity_type": item.entity_type,
+            "nationality": item.nationality,
+            "list_date": item.list_date.isoformat() if item.list_date else None,
+            "program": item.program,
+            "remarks": item.remarks,
+            "created_at": item.created_at.isoformat() if item.created_at else None,
+            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+            "actions": f"<button class='btn btn-sm btn-info view-btn' data-id='{item.id}'>View</button> <button class='btn btn-sm btn-warning edit-btn' data-id='{item.id}'>Edit</button>"
+        })
+
+    return {
+        "draw": draw,
+        "recordsTotal": total_records,
+        "recordsFiltered": total_records, # For now, recordsFiltered is same as recordsTotal after search filter
+        "data": data,
+    }
+
+# PEP List API Endpoints
+@app.get("/api/pep/lists")
+async def get_pep_lists(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+
+    params = request.query_params
+
+    draw = int(params.get("draw", 1))
+    start = int(params.get("start", 0))
+    length = int(params.get("length", 10))
+    search_value = params.get("search[value]", "")
+
+    query = db.query(PEPList)
+
+    # Apply search filter
+    if search_value:
+        query = query.filter(
+            or_(
+                PEPList.full_name.ilike(f"%{search_value}%"),
+                PEPList.country.ilike(f"%{search_value}%"),
+                PEPList.position.ilike(f"%{search_value}%"),
+            )
+        )
+
+    # Total records before pagination
+    total_records = query.count()
+
+    # Apply ordering
+    order_column_index = int(params.get("order[0][column]", 0))
+    order_direction = params.get("order[0][dir]", "asc")
+    order_column_name = params.get(f"columns[{order_column_index}][data]")
+
+    # Map DataTables column names to model attributes
+    pep_column_map = {
+        "0": "full_name",
+        "1": "country",
+        "2": "position",
+        "3": "start_date",
+    }
+    
+    if order_column_name and pep_column_map.get(str(order_column_index)):
+        mapped_column = pep_column_map[str(order_column_index)]
+        if hasattr(PEPList, mapped_column):
+            if order_direction == "asc":
+                query = query.order_by(asc(getattr(PEPList, mapped_column)))
+            else:
+                query = query.order_by(desc(getattr(PEPList, mapped_column)))
+    else: # Default ordering if column name is invalid or not provided
+        query = query.order_by(desc(PEPList.created_at))
+
+    # Apply pagination
+    query = query.offset(start).limit(length)
+
+    logger.info(f"Executing query for PEP lists with start={start}, length={length}, search_value='{search_value}'")
+    pep_lists = query.all()
+    logger.info(f"Fetched {len(pep_lists)} PEP list entries.")
+
+    # Prepare data for DataTables
+    data = []
+    for item in pep_lists:
+        data.append({
+            "id": str(item.id),
+            "name": item.full_name,
+            "country": item.country,
+            "position": item.position,
+            "listed_since": item.start_date.isoformat() if item.start_date else None,
+            "created_at": item.created_at.isoformat() if item.created_at else None,
+            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+            "actions": f"<button class='btn btn-sm btn-info view-btn' data-id='{item.id}'>View</button> <button class='btn btn-sm btn-warning edit-btn' data-id='{item.id}'>Edit</button>"
+        })
+
+    return {
+        "draw": draw,
+        "recordsTotal": total_records,
+        "recordsFiltered": total_records, # For now, recordsFiltered is same as recordsTotal after search filter
+        "data": data,
+    }
+
+@app.get("/api/pep/lists/{pep_id}")
+async def get_pep_list_details(
+    pep_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency)
+):
+    if isinstance(current_user, RedirectResponse):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    pep_list_entry = db.query(PEPList).filter(PEPList.id == pep_id).first()
+    if not pep_list_entry:
+        raise HTTPException(status_code=404, detail="PEP list entry not found")
+
+    return {
+        "id": str(pep_list_entry.id),
+        "full_name": pep_list_entry.full_name,
+        "country": pep_list_entry.country,
+        "position": pep_list_entry.position,
+        "start_date": pep_list_entry.start_date.isoformat() if pep_list_entry.start_date else None,
+        "created_at": pep_list_entry.created_at.isoformat() if pep_list_entry.created_at else None,
+        "updated_at": pep_list_entry.updated_at.isoformat() if pep_list_entry.updated_at else None,
+    }
+
+@app.post("/api/pep/lists/add")
+async def add_pep_list_entry(
+    pep_list_data: PEPListCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency)
+):
+    logger.info(f"Received PEP list add request: {pep_list_data.dict()}")
+    if isinstance(current_user, RedirectResponse):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    new_entry = PEPList(
+        full_name=pep_list_data.full_name,
+        country=pep_list_data.country,
+        position=pep_list_data.position,
+        start_date=pep_list_data.start_date,
+    )
+    db.add(new_entry)
+    db.commit()
+    db.refresh(new_entry)
+    return {"message": "PEP list entry added successfully!", "id": str(new_entry.id)}
+
+@app.put("/api/pep/lists/{pep_id}")
+async def update_pep_list_entry(
+    pep_id: str,
+    pep_list_data: PEPListUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency)
+):
+    if isinstance(current_user, RedirectResponse):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    existing_entry = db.query(PEPList).filter(PEPList.id == pep_id).first()
+    if not existing_entry:
+        raise HTTPException(status_code=404, detail="PEP list entry not found")
+
+    for field, value in pep_list_data.dict(exclude_unset=True).items():
+        setattr(existing_entry, field, value)
+
+    db.commit()
+    db.refresh(existing_entry)
+    return {"message": "PEP list entry updated successfully!", "id": str(existing_entry.id)}
+
+# Pydantic model for creating a new SanctionsList entry
+class SanctionsListCreate(BaseModel):
+    list_name: str
+    entity_name: str
+    entity_type: Optional[str] = None
+    nationality: Optional[str] = None
+    program: Optional[str] = None
+    remarks: Optional[str] = None
+
+class PEPListCreate(BaseModel):
+    full_name: str
+    country: Optional[str] = None
+    position: Optional[str] = None
+    start_date: Optional[datetime] = None
+
+class PEPListUpdate(BaseModel):
+    full_name: Optional[str] = None
+    country: Optional[str] = None
+    position: Optional[str] = None
+    start_date: Optional[datetime] = None
+
+@app.post("/api/sanctions/lists/add")
+async def add_sanctions_list_entry(
+    sanctions_list_data: SanctionsListCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency)
+):
+    if isinstance(current_user, RedirectResponse):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    new_entry = SanctionsList(
+        list_name=sanctions_list_data.list_name,
+        entity_name=sanctions_list_data.entity_name,
+        entity_type=sanctions_list_data.entity_type,
+        nationality=sanctions_list_data.nationality,
+        program=sanctions_list_data.program,
+        remarks=sanctions_list_data.remarks,
+        # list_date and created_at/updated_at will be set by default in the model
+    )
+    db.add(new_entry)
+    db.commit()
+    db.refresh(new_entry)
+    return {"message": "Sanctions list entry added successfully!", "id": str(new_entry.id)}
+
+@app.put("/api/sanctions/lists/{list_id}")
+async def update_sanctions_list_entry(
+    list_id: str,
+    sanctions_list_data: SanctionsListCreate, # Re-use the create model for update
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency)
+):
+    if isinstance(current_user, RedirectResponse):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    existing_entry = db.query(SanctionsList).filter(SanctionsList.id == list_id).first()
+    if not existing_entry:
+        raise HTTPException(status_code=404, detail="Sanctions list entry not found")
+
+    existing_entry.list_name = sanctions_list_data.list_name
+    existing_entry.entity_name = sanctions_list_data.entity_name
+    existing_entry.entity_type = sanctions_list_data.entity_type
+    existing_entry.nationality = sanctions_list_data.nationality
+    existing_entry.program = sanctions_list_data.program
+    existing_entry.remarks = sanctions_list_data.remarks
+    # updated_at will be set automatically by SQLAlchemy
+
+    db.commit()
+    db.refresh(existing_entry)
+    return {"message": "Sanctions list entry updated successfully!", "id": str(existing_entry.id)}
+
+@app.get("/api/sanctions/lists/{list_id}")
+async def get_sanctions_list_details(
+    list_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency)
+):
+    if isinstance(current_user, RedirectResponse):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    sanctions_list_entry = db.query(SanctionsList).filter(SanctionsList.id == list_id).first()
+    if not sanctions_list_entry:
+        raise HTTPException(status_code=404, detail="Sanctions list entry not found")
+
+    return {
+        "id": str(sanctions_list_entry.id),
+        "list_name": sanctions_list_entry.list_name,
+        "entity_name": sanctions_list_entry.entity_name,
+        "entity_type": sanctions_list_entry.entity_type,
+        "nationality": sanctions_list_entry.nationality,
+        "program": sanctions_list_entry.program,
+        "remarks": sanctions_list_entry.remarks,
+        "list_date": sanctions_list_entry.list_date.isoformat() if sanctions_list_entry.list_date else None,
+        "created_at": sanctions_list_entry.created_at.isoformat() if sanctions_list_entry.created_at else None,
+        "updated_at": sanctions_list_entry.updated_at.isoformat() if sanctions_list_entry.updated_at else None,
+    }
 
 @app.get('/sanctions/lists', response_class=HTMLResponse)
 async def sanctions_lists(request: Request, current_user: User = Depends(get_current_user_from_cookie)):
@@ -645,12 +1119,47 @@ async def sanctions_lists(request: Request, current_user: User = Depends(get_cur
         return current_user
     return templates.TemplateResponse('sanctions/lists.html', {"request": request, "user": current_user})
 
+@app.get('/sanctions/lists/add', response_class=HTMLResponse)
+async def add_sanctions_list_page(request: Request, current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    return templates.TemplateResponse('sanctions/add_list.html', {"request": request, "user": current_user})
+
+@app.get('/sanctions/lists/view/{list_id}', response_class=HTMLResponse)
+async def view_sanctions_list_page(list_id: str, request: Request, current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    return templates.TemplateResponse('sanctions/view_list.html', {"request": request, "user": current_user, "list_id": list_id})
+
+@app.get('/sanctions/lists/edit/{list_id}', response_class=HTMLResponse)
+async def edit_sanctions_list_page(list_id: str, request: Request, current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    return templates.TemplateResponse('sanctions/edit_list.html', {"request": request, "user": current_user, "list_id": list_id})
+
 @app.get('/sanctions/pep', response_class=HTMLResponse)
 async def sanctions_pep(request: Request, current_user: User = Depends(get_current_user_from_cookie)):
     if isinstance(current_user, RedirectResponse):
         return current_user
     return templates.TemplateResponse('sanctions/pep.html', {"request": request, "user": current_user})
 
+@app.get('/sanctions/pep/add', response_class=HTMLResponse)
+async def add_pep_page(request: Request, current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    return templates.TemplateResponse('sanctions/add_pep.html', {"request": request, "user": current_user})
+
+@app.get('/sanctions/pep/view/{pep_id}', response_class=HTMLResponse)
+async def view_pep_page(pep_id: str, request: Request, current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    return templates.TemplateResponse('sanctions/view_pep.html', {"request": request, "user": current_user, "pep_id": pep_id})
+
+@app.get('/sanctions/pep/edit/{pep_id}', response_class=HTMLResponse)
+async def edit_pep_page(pep_id: str, request: Request, current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    return templates.TemplateResponse('sanctions/edit_pep.html', {"request": request, "user": current_user, "pep_id": pep_id})
 
 # WebSocket endpoint for real-time updates
 @app.websocket("/ws")
@@ -719,13 +1228,218 @@ async def login_for_access_token_admin(response: Response, form_data: OAuth2Pass
     logger.info("response.set_cookie call executed.")
     logger.info(f"Set-Cookie header: {response.headers.get('Set-Cookie')}")
     logger.info(f"Set-Cookie header: {response.headers.get('Set-Cookie')}")
-    return {"message": "Login successful", "access_token": access_token, "token_type": "bearer"}
+
+    redirect_url = "/admin"
+    
+
+    return {"message": "Login successful", "access_token": access_token, "token_type": "bearer", "redirect_url": redirect_url}
+
+@app.post("/api/staff/token")
+async def login_for_access_token_staff(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.username == form_data.username).first()
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    staff_roles = ["admin", "compliance_officer", "aml_analyst", "supervisor"]
+    if user.role not in staff_roles:
+        raise HTTPException(status_code=403, detail="Not authorized to access staff portal")
+
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    
+    response.set_cookie(
+        key="staff_token",
+        value=access_token,
+        httponly=False,
+        max_age=access_token_expires.total_seconds(),
+        expires=access_token_expires.total_seconds(),
+        samesite="Lax",
+        secure=not settings.DEBUG,
+        path="/"
+    )
+    logger.info(f"Staff token cookie set for user: {user.username}")
+
+    return {"message": "Login successful", "access_token": access_token, "token_type": "bearer", "redirect_url": "/staff/dashboard"}
+
+@app.post("/api/staff/logout")
+async def staff_logout(response: Response):
+    response.delete_cookie(key="staff_token", path="/", samesite="Lax")
+    logger.info("Staff token cookie deleted.")
+    return {"message": "Logged out successfully"}
+
+@app.get("/staff/login", response_class=HTMLResponse)
+async def staff_login_page(request: Request):
+    return templates.TemplateResponse("staff_login.html", {"request": request})
+
+@app.get("/staff/dashboard", response_class=HTMLResponse)
+async def staff_dashboard_page(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_staff_user)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    return templates.TemplateResponse("staff_dashboard.html", {"request": request, "user": current_user})
+
+
+
+
+
+
 
 @app.post("/api/admin/logout")
 async def admin_logout(response: Response):
     response.delete_cookie(key="admin_token", path="/", samesite="Lax")
     logger.info("Admin token cookie deleted.")
     return {"message": "Logged out successfully"}
+
+@app.post("/api/test/create_customer_with_account")
+async def create_test_customer_with_account(
+    username: str = Form(...),
+    email: str = Form(...),
+    full_name: str = Form(...),
+    initial_balance: float = Form(1000.0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency)
+):
+    """Helper endpoint to create a test customer with a default account."""
+    if db.query(User).filter(User.username == username).first():
+        raise HTTPException(status_code=400, detail="Username already registered as a user.")
+    if db.query(Customer).filter(Customer.email == email).first():
+        raise HTTPException(status_code=400, detail="Email already registered as a customer.")
+
+    # Create Customer
+    new_customer = Customer(
+        id=str(uuid.uuid4()),
+        customer_id=username, # Using username as customer_id for simplicity
+        username=username,
+        full_name=full_name,
+        email=email,
+        account_opening_date=datetime.now(),
+        hashed_password=get_password_hash("password"), # Default password for test customer
+        risk_rating=RiskRating.LOW
+    )
+    db.add(new_customer)
+    db.flush() # Flush to get customer_id for account
+
+    # Create Account for Customer
+    new_account = Account(
+        id=str(uuid.uuid4()),
+        account_number=f"ACC{random.randint(100000000, 999999999)}",
+        customer_id=new_customer.customer_id,
+        account_type="SAVINGS",
+        currency="USD",
+        balance=initial_balance,
+        status="ACTIVE",
+        opening_date=datetime.now()
+    )
+    db.add(new_account)
+    db.commit()
+    db.refresh(new_customer)
+    db.refresh(new_account)
+
+    logger.info(f"Test customer {username} and account {new_account.account_number} created.")
+    return {"message": "Test customer and account created successfully", "customer_id": new_customer.customer_id, "account_number": new_account.account_number}
+
+@app.post("/api/test/simulate_normal_incoming_transactions")
+async def simulate_normal_incoming_transactions(
+    customer_id: str = Form(...),
+    account_number: str = Form(...),
+    amount: float = Form(...),
+    count: int = Form(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency)
+):
+    """Helper endpoint to simulate multiple normal incoming transactions for a customer."""
+    customer = db.query(Customer).filter(Customer.customer_id == customer_id).first()
+    account = db.query(Account).filter(Account.account_number == account_number).first()
+
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found.")
+    if not account or account.customer_id != customer_id:
+        raise HTTPException(status_code=404, detail="Account not found or does not belong to customer.")
+
+    transactions_created = []
+    for i in range(count):
+        db_transaction = Transaction(
+            customer_id=customer_id,
+            account_number=account_number,
+            transaction_type="CREDIT",
+            amount=amount,
+            base_amount=await currency_service.convert_to_base(amount, "USD"),
+            currency="USD",
+            channel="Simulated",
+            counterparty_account=f"SIMULATED_CP_{i}",
+            counterparty_name="Simulated Counterparty",
+            narrative=f"Simulated normal incoming transaction {i+1}",
+            processed_by=current_user.username,
+            status=TransactionStatus.COMPLETED
+        )
+        db.add(db_transaction)
+        transactions_created.append(db_transaction)
+    
+    db.commit()
+    for t in transactions_created: # Refresh to get IDs
+        db.refresh(t)
+
+    logger.info(f"Simulated {count} normal incoming transactions for customer {customer_id}.")
+    return {"message": f"Successfully simulated {count} normal incoming transactions.", "transaction_ids": [str(t.id) for t in transactions_created]}
+
+@app.post("/api/test/simulate_unusual_incoming_transaction")
+async def simulate_unusual_incoming_transaction(
+    customer_id: str = Form(...),
+    account_number: str = Form(...),
+    amount: float = Form(...),
+    currency: str = Form("USD"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
+    """Helper endpoint to simulate an unusual incoming transaction for a customer, triggering Control 2."""
+    customer = db.query(Customer).filter(Customer.customer_id == customer_id).first()
+    account = db.query(Account).filter(Account.account_number == account_number).first()
+
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found.")
+    if not account or account.customer_id != customer_id:
+        raise HTTPException(status_code=404, detail="Account not found or does not belong to customer.")
+
+    # Create the unusual transaction record
+    db_transaction = Transaction(
+        customer_id=customer_id,
+        account_number=account_number,
+        transaction_type="CREDIT",
+        amount=amount,
+        base_amount=await currency_service.convert_to_base(amount, currency),
+        currency=currency,
+        channel="Simulated_Unusual",
+        counterparty_account="UNUSUAL_CP",
+        counterparty_name="Unusual Counterparty",
+        narrative="Simulated unusual incoming transaction to trigger Control 2",
+        processed_by=current_user.username,
+        status=TransactionStatus.PENDING
+    )
+    db.add(db_transaction)
+    db.commit()
+    db.refresh(db_transaction)
+
+    # Trigger AML controls in background
+    background_tasks.add_task(
+        process_transaction_controls,
+        db_transaction.id,
+        {
+            "customer_id": customer_id,
+            "base_amount": db_transaction.base_amount,
+            "transaction_type": "CREDIT",
+            "channel": "Simulated_Unusual",
+            "id": str(db_transaction.id) # Pass transaction ID for logging
+        }
+    )
+
+    logger.info(f"Simulated unusual incoming transaction for customer {customer_id} with amount {amount}.")
+    return {"message": "Successfully simulated unusual incoming transaction.", "transaction_id": str(db_transaction.id)}
 
 @app.get("/api/admin/users")
 async def get_users(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
@@ -764,6 +1478,64 @@ async def delete_user(user_id: str, db: Session = Depends(get_db), current_user:
     db.delete(user)
     db.commit()
     return {"message": "User deleted successfully"}
+
+class TransferRequest(BaseModel):
+    recipient_account: str
+    amount: float
+    currency: str
+
+@app.post("/api/admin/create_self_transaction")
+async def create_admin_self_transaction(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency)
+):
+    """Create a self-posting transaction for the logged-in admin."""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    
+    # For demonstration, we'll find the admin's customer account
+    admin_customer = db.query(Customer).filter(Customer.username == current_user.username).first()
+    if not admin_customer:
+        raise HTTPException(status_code=404, detail="Admin customer account not found.")
+
+    # Find the admin's account
+    admin_account = db.query(Account).filter(Account.customer_id == admin_customer.customer_id).first()
+    if not admin_account:
+        raise HTTPException(status_code=404, detail="Admin account not found.")
+
+    # Create a self-posting transaction
+    transaction_data = {
+        "customer_id": admin_customer.customer_id,
+        "account_number": admin_account.account_number,
+        "transaction_type": "DEBIT",
+        "amount": 100.0,
+        "currency": "USD",
+        "channel": "Internal",
+        "counterparty_account": admin_account.account_number,
+        "counterparty_name": admin_customer.full_name,
+        "counterparty_bank": "Self",
+        "reference": "Admin self-posting test",
+        "narrative": "Admin self-posting transaction for control testing."
+    }
+
+    # Use the existing transaction processing logic
+    # In a real app, you might want to refactor this to a common function
+    db_transaction = Transaction(**transaction_data, base_amount=100.0, processed_by=current_user.username, status=TransactionStatus.PENDING)
+    db.add(db_transaction)
+    db.commit()
+    db.refresh(db_transaction)
+
+    # Background processing for AML controls
+    background_tasks = BackgroundTasks()
+    background_tasks.add_task(
+        process_transaction_controls,
+        db_transaction.id,
+        transaction_data
+    )
+
+    return {"message": "Admin self-posting transaction created successfully", "transaction_id": db_transaction.id}
+
+
 
 @app.post("/api/admin/sanctions/upload")
 async def upload_sanctions_list(file: UploadFile = File(...), current_user: User = Depends(get_current_user_dependency)):
@@ -813,82 +1585,6 @@ async def get_system_status(db: Session = Depends(get_db), current_user: User = 
         "ml_predictions_today": 200
     }
 
-@app.get("/api/dashboard/stats")
-async def get_dashboard_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
-    if isinstance(current_user, RedirectResponse):
-        return current_user
-
-    today = datetime.now().date()
-    
-    total_transactions = db.query(Transaction).count()
-    today_transactions = db.query(Transaction).filter(func.date(Transaction.created_at) == today).count()
-    
-    open_alerts = db.query(Alert).filter(Alert.status == AlertStatus.OPEN).count()
-    high_risk_alerts = db.query(Alert).filter(Alert.risk_score >= 0.8, Alert.status == AlertStatus.OPEN).count()
-
-    # Risk Distribution (example: group by risk level)
-    risk_distribution_data = db.query(
-        case(
-            (Alert.risk_score >= 0.9, 'critical'),
-            (Alert.risk_score >= 0.7, 'high'),
-            (Alert.risk_score >= 0.4, 'medium'),
-            else_='low'
-        ).label('risk_level'),
-        func.count(Alert.id).label('count'),
-        func.avg(Alert.risk_score).label('avg_risk')
-    ).group_by('risk_level').all()
-
-    risk_distribution = []
-    for item in risk_distribution_data:
-        risk_distribution.append({
-            "risk_level": item.risk_level,
-            "count": item.count,
-            "avg_risk": round(item.avg_risk, 2)
-        })
-
-    # Alert Trends (example: daily high and medium risk alerts for last 7 days)
-    alert_trends_data = db.query(
-        func.date(Alert.created_at).label('date'),
-        func.sum(case((Alert.risk_score >= 0.7, 1), else_=0)).label('high_risk_count'),
-        func.sum(case((Alert.risk_score >= 0.4, 1), (Alert.risk_score < 0.7, 1), else_=0)).label('medium_risk_count')
-    ).filter(
-        Alert.created_at >= datetime.now() - timedelta(days=7)
-    ).group_by('date').order_by('date').all()
-
-    alert_trends = {
-        "labels": [item.date.isoformat() for item in alert_trends_data],
-        "high_risk": [item.high_risk_count for item in alert_trends_data],
-        "medium_risk": [item.medium_risk_count for item in alert_trends_data]
-    }
-
-    return {
-        "total_transactions": total_transactions,
-        "today_transactions": today_transactions,
-        "open_alerts": open_alerts,
-        "high_risk_alerts": high_risk_alerts,
-        "risk_distribution": risk_distribution,
-        "alert_trends": alert_trends
-    }
-
-@app.get("/api/dashboard/aml-control-summary")
-async def get_aml_control_summary(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
-    if isinstance(current_user, RedirectResponse):
-        return current_user
-
-    aml_summary = db.query(
-        Alert.alert_type,
-        func.count(Alert.id).label('triggered_count'),
-        func.avg(Alert.risk_score).label('average_risk_score')
-    ).group_by(Alert.alert_type).all()
-
-    return [
-        {
-            "control_type": item.alert_type,
-            "triggered_count": item.triggered_count,
-            "average_risk_score": round(item.average_risk_score, 2) if item.average_risk_score else 0.0
-        } for item in aml_summary
-    ]
-
 @app.get("/api/admin/configuration")
 async def get_configuration(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
     config_settings = db.query(SystemConfiguration).all()
@@ -915,6 +1611,22 @@ async def get_configuration(db: Session = Depends(get_db), current_user: User = 
             }
         }
     }
+
+@app.post("/api/admin/configuration")
+async def update_configuration(
+    config_update: ConfigurationUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    for key, value in config_update.dict().items():
+        db_config = db.query(SystemConfiguration).filter(SystemConfiguration.config_key == key).first()
+        if db_config:
+            db_config.config_value = str(value)
+        else:
+            db_config = SystemConfiguration(config_key=key, config_value=str(value))
+            db.add(db_config)
+    db.commit()
+    return {"message": "Configuration updated successfully"}
 
 @app.post("/api/admin/users")
 async def create_user(user: UserCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
@@ -1000,7 +1712,7 @@ async def update_sanctions(background_tasks: BackgroundTasks, db: Session = Depe
 
 
 @app.get("/api/monitoring/transactions/recent")
-async def get_recent_transactions(db: Session = Depends(get_db), limit: int = 50):
+async def get_recent_transactions(db: Session = Depends(get_db), limit: int = 50, current_user: User = Depends(get_current_user_dependency)):
     transactions = db.query(Transaction).order_by(desc(Transaction.created_at)).limit(limit).all()
     return [
         {
@@ -1016,7 +1728,7 @@ async def get_recent_transactions(db: Session = Depends(get_db), limit: int = 50
     ]
 
 @app.get("/api/monitoring/alerts/recent")
-async def get_recent_alerts(db: Session = Depends(get_db), limit: int = 50):
+async def get_recent_alerts(db: Session = Depends(get_db), limit: int = 50, current_user: User = Depends(get_current_user_dependency)):
     alerts = db.query(Alert).order_by(desc(Alert.created_at)).limit(limit).all()
     return [
         {
@@ -1029,9 +1741,11 @@ async def get_recent_alerts(db: Session = Depends(get_db), limit: int = 50):
         } for a in alerts
     ]
 
+
+
 @app.get("/api/admin/transactions/recent")
 async def get_admin_recent_transactions(db: Session = Depends(get_db), limit: int = 100, time_range: str = "30d"):
-    end_date = datetime.now()
+    end_date = datetime.utcnow()
     if time_range == "7d":
         start_date = end_date - timedelta(days=7)
     elif time_range == "30d":
@@ -1057,32 +1771,6 @@ async def get_admin_recent_transactions(db: Session = Depends(get_db), limit: in
             "timestamp": t.created_at.isoformat(),
         } for t in transactions
     ]
-
-@app.put("/api/transactions/{transaction_id}/status")
-async def update_transaction_status(
-    transaction_id: str,
-    status: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_from_cookie)
-):
-    if isinstance(current_user, RedirectResponse):
-        return current_user
-    
-    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
-    if not transaction:
-        raise HTTPException(status_code=404, detail="Transaction not found")
-
-    try:
-        # Validate the new status against the TransactionStatus enum
-        new_status = TransactionStatus[status.upper()]
-    except KeyError:
-        raise HTTPException(status_code=400, detail=f"Invalid status: {status}. Must be one of {', '.join([s.value for s in TransactionStatus])}")
-
-    transaction.status = new_status
-    db.commit()
-    db.refresh(transaction)
-
-    return {"message": f"Transaction {transaction_id} status updated to {new_status.value}"}
 
 @app.get("/api/monitoring/transactions")
 async def api_get_transactions(request: Request, db: Session = Depends(get_db),
@@ -1141,6 +1829,8 @@ async def api_get_transactions(request: Request, db: Session = Depends(get_db),
         ]
     }
 
+
+
 @app.get("/monitoring/transactions/{transaction_id}", response_class=HTMLResponse)
 async def view_transaction_details(transaction_id: str, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
     if isinstance(current_user, RedirectResponse):
@@ -1181,10 +1871,26 @@ async def get_transaction_by_id(transaction_id: str, db: Session = Depends(get_d
         "ml_prediction": transaction.ml_prediction if hasattr(transaction, 'ml_prediction') else None
     }
 
+@app.put("/api/transactions/{transaction_id}/status")
+async def update_transaction_status(
+    transaction_id: str,
+    status_update: TransactionStatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    
+    transaction.status = status_update.status
+    db.commit()
+    
+    return {"message": "Transaction status updated successfully"}
+
 @app.get("/api/monitoring/customers")
 async def api_get_customers(request: Request, db: Session = Depends(get_db),
-                                 search_term: Optional[str] = None,
-                                 risk_rating: Optional[str] = None):
+                              search_term: Optional[str] = None,
+                              risk_rating: Optional[str] = None):
     params = request.query_params
     
     draw = int(params.get("draw", 1))
@@ -1222,6 +1928,8 @@ async def api_get_customers(request: Request, db: Session = Depends(get_db),
         ]
     }
 
+
+
 @app.get("/customers/{customer_id}/profile", response_class=HTMLResponse)
 async def view_customer_profile(customer_id: str, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
     if isinstance(current_user, RedirectResponse):
@@ -1249,6 +1957,7 @@ async def export_logs(current_user: User = Depends(get_current_user_dependency))
     dummy_log_content += f"{datetime.now().isoformat()},INFO,User {current_user.username} exported logs\n"
     dummy_log_content += f"{datetime.now().isoformat()},WARNING,Dummy warning message\n"
     return Response(content=dummy_log_content, media_type="text/csv")
+
 
 
 
@@ -1297,145 +2006,8 @@ async def create_transaction(
     
     return {"message": "Transaction processed", "transaction_id": db_transaction.id}
 
-async def process_transaction_controls(transaction_id: str, transaction_data: dict):
-    """Background task to process AML controls"""
-    db = next(get_db())
-    logger.debug(f"[process_transaction_controls] Starting for transaction_id: {transaction_id}")
+
     
-    try:
-        transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
-        if not transaction:
-            logger.error(f"[process_transaction_controls] Transaction {transaction_id} not found for processing.")
-            return
-
-        logger.debug(f"[process_transaction_controls] Setting status to PROCESSING for {transaction_id}")
-        transaction.status = TransactionStatus.PROCESSING
-        db.commit()
-        db.refresh(transaction)
-        logger.debug(f"[process_transaction_controls] Status updated to PROCESSING for {transaction_id}")
-        logger.debug(f"[process_transaction_controls] Committing status update to PROCESSING for {transaction_id}")
-
-        # Run all AML controls
-        logger.info(f"[process_transaction_controls] Running AML controls for {transaction_id}")
-        control_results = await aml_engine.run_all_controls(transaction_data, db)
-        logger.info(f"[process_transaction_controls] AML controls completed for {transaction_id}")
-        
-        # Run ML anomaly detection
-        logger.info(f"[process_transaction_controls] Running ML anomaly detection for {transaction_id}")
-        anomaly_score = await ml_engine.detect_anomaly(transaction_data, db)
-        transaction.ml_prediction = anomaly_score # Assign ML prediction to transaction
-        logger.info(f"[process_transaction_controls] ML anomaly detection completed for {transaction_id}, score: {anomaly_score}")
-        
-        # Calculate risk score
-        logger.info(f"[process_transaction_controls] Calculating risk score for {transaction_id}")
-        risk_score = await risk_engine.calculate_risk_score(transaction_data, db)
-        transaction.risk_score = risk_score
-        logger.info(f"[process_transaction_controls] Risk score calculated for {transaction_id}: {risk_score}")
-        
-        # Sanctions screening
-        logger.info(f"[process_transaction_controls] Running sanctions screening for {transaction_id}")
-        sanctions_result = await sanctions_engine.screen_transaction(transaction_data, db)
-        logger.info(f"[process_transaction_controls] Sanctions screening completed for {transaction_id}")
-        
-        # Create alerts if necessary
-        alerts_created = []
-        
-        for control_name, result in control_results.items():
-            if result['triggered']:
-                alert = Alert(
-                    transaction_id=transaction_id,
-                    alert_type=f"AML_{control_name}",
-                    risk_score=result['risk_score'],
-                    description=result['description'],
-                    metadata=result['metadata'],
-                    status="OPEN"
-                )
-                db.add(alert)
-                alerts_created.append(alert)
-        
-        if anomaly_score > 0.7:
-            alert = Alert(
-                transaction_id=transaction_id,
-                alert_type="ML_ANOMALY",
-                risk_score=anomaly_score,
-                description=f"ML anomaly detected with score {anomaly_score:.2f}",
-                status="OPEN"
-            )
-            db.add(alert)
-            alerts_created.append(alert)
-        
-        if sanctions_result['matched']:
-            alert = Alert(
-                transaction_id=transaction_id,
-                alert_type="SANCTIONS_HIT",
-                risk_score=1.0,
-                description=f"Sanctions match: {sanctions_result['details']}",
-                status="OPEN",
-                priority="HIGH"
-            )
-            db.add(alert)
-            alerts_created.append(alert)
-        
-        if alerts_created:
-            logger.debug(f"[process_transaction_controls] Alerts created for {transaction_id}. Setting status to FLAGGED.")
-            transaction.status = TransactionStatus.FLAGGED
-        else:
-            logger.debug(f"[process_transaction_controls] No alerts created for {transaction_id}. Setting status to COMPLETED.")
-            transaction.status = TransactionStatus.COMPLETED
-        
-        db.commit()
-        db.refresh(transaction)
-        logger.debug(f"[process_transaction_controls] Final status updated to {transaction.status} for {transaction_id}")
-        logger.debug(f"[process_transaction_controls] Committing final status update to {transaction.status} for {transaction_id}")
-
-        # Send real-time update for transaction status
-        await manager.broadcast({
-            "type": "transaction_status_update",
-            "data": {
-                "id": str(transaction.id),
-                "status": transaction.status.value if hasattr(transaction.status, 'value') else str(transaction.status)
-            }
-        })
-        
-        # Send real-time notifications
-        for alert in alerts_created:
-            await manager.broadcast({
-                "type": "alert_generated",
-                "data": {
-                    "id": alert.id,
-                    "alert_type": alert.alert_type,
-                    "risk_score": alert.risk_score,
-                    "description": alert.description,
-                    "customer_id": alert.transaction.customer_id if alert.transaction else None,
-                    "timestamp": alert.created_at.isoformat()
-                }
-            })
-            
-            # Send email notification for high-risk alerts
-            if alert.risk_score > 0.8:
-                await notification_service.send_alert_email(alert)
-    
-    except Exception as e:
-        db.rollback()
-        logger.error(f"[process_transaction_controls] Critical error processing transaction {transaction_id}: {e}", exc_info=True)
-        transaction.status = TransactionStatus.FAILED
-        transaction.processing_status = str(e)
-        db.commit()
-        db.refresh(transaction)
-        logger.debug(f"[process_transaction_controls] Status updated to FAILED for {transaction_id} due to error.")
-        logger.debug(f"[process_transaction_controls] Committing status update to FAILED for {transaction_id}")
-        
-        # Send real-time update for failed transaction status
-        await manager.broadcast({
-            "type": "transaction_status_update",
-            "data": {
-                "id": str(transaction.id),
-                "status": transaction.status.value if hasattr(transaction.status, 'value') else str(transaction.status)
-            }
-        })
-    finally:
-        db.close()
-        logger.info(f"[process_transaction_controls] Finished for transaction_id: {transaction_id}")
 
 @app.get("/api/alerts/", response_model=List[AlertResponse])
 async def get_alerts(
@@ -1443,11 +2015,13 @@ async def get_alerts(
     alert_type: Optional[str] = None,
     time_range: Optional[str] = None,
     risk_level: Optional[str] = None,
+    priority: Optional[str] = None,
+    assigned_to: Optional[str] = None,
     start_date: Optional[str] = None, # Added for custom date range
     end_date: Optional[str] = None,   # Added for custom date range
     limit: Optional[int] = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_from_cookie)
+    current_user: User = Depends(get_current_staff_user) # Changed dependency to staff user
 ):
     if isinstance(current_user, RedirectResponse):
         return current_user
@@ -1458,6 +2032,13 @@ async def get_alerts(
         query = query.filter(Alert.status == status)
     if alert_type:
         query = query.filter(Alert.alert_type == alert_type)
+    if priority:
+        query = query.filter(Alert.priority == priority)
+    if assigned_to:
+        if assigned_to == "me":
+            query = query.filter(Alert.assigned_to == current_user.username)
+        elif assigned_to == "unassigned":
+            query = query.filter(Alert.assigned_to == None)
     
     # Handle time_range and custom date range
     if time_range:
@@ -1510,13 +2091,15 @@ async def get_alerts(
             created_at=alert.created_at,
             transaction_id=alert.transaction_id,
             customer_id=alert.transaction.customer_id if alert.transaction else "",
-            description=alert.description
+            description=alert.description,
+            transaction_amount=alert.transaction.amount if alert.transaction else None,
+            transaction_currency=alert.transaction.currency if alert.transaction else None,
         )
         for alert in alerts
     ]
 
 @app.get("/api/alerts/{alert_id}")
-async def get_alert(alert_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+async def get_alert(alert_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_staff_user)):
     if isinstance(current_user, RedirectResponse):
         return current_user
     alert = db.query(Alert).options(joinedload(Alert.transaction)).filter(Alert.id == alert_id).first()
@@ -1529,6 +2112,273 @@ class AlertUpdate(BaseModel):
     assigned_to: Optional[str] = None
     priority: Optional[str] = None
     resolution_notes: Optional[str] = None
+
+@app.get("/api/cases/", response_model=List[CaseResponse])
+async def get_cases(
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+    assigned_to: Optional[str] = None,
+    limit: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_staff_user) # Use staff user dependency
+):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    """Get cases with optional filtering"""
+    query = db.query(Case).options(joinedload(Case.alert).joinedload(Alert.transaction)) # Eager load alert and transaction
+
+    if status:
+        query = query.filter(Case.status == status)
+    if priority:
+        query = query.filter(Case.priority == priority)
+    if assigned_to:
+        if assigned_to == "me":
+            query = query.filter(Case.assigned_to == current_user.username)
+        elif assigned_to == "unassigned":
+            query = query.filter(Case.assigned_to == None)
+
+    cases = query.order_by(desc(Case.created_at))
+    if limit is not None:
+        cases = cases.limit(limit)
+    cases = cases.all()
+
+    return [
+        CaseResponse(
+            id=case.id,
+            case_number=case.case_number,
+            title=case.title,
+            description=case.description,
+            status=case.status.value if hasattr(case.status, 'value') else str(case.status),
+            priority=case.priority,
+            assigned_to=case.assigned_to,
+            created_at=case.created_at,
+            target_completion_date=case.target_completion_date,
+            alert=AlertResponse(
+                id=case.alert.id,
+                alert_type=case.alert.alert_type,
+                risk_score=case.alert.risk_score,
+                status=case.alert.status.value if hasattr(case.alert.status, 'value') else str(case.alert.status),
+                created_at=case.alert.created_at,
+                transaction_id=case.alert.transaction_id,
+                customer_id=case.alert.transaction.customer_id if case.alert.transaction else "",
+                description=case.alert.description,
+                transaction_amount=case.alert.transaction.amount if case.alert.transaction else None,
+                transaction_currency=case.alert.transaction.currency if case.alert.transaction else None,
+            ) if case.alert else None
+        )
+        for case in cases
+    ]
+
+@app.get("/api/cases/{case_id}")
+async def get_case(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    case = db.query(Case).options(joinedload(Case.alert).joinedload(Alert.transaction), joinedload(Case.activities)).filter(Case.id == case_id).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return case
+
+@app.put("/api/alerts/{alert_id}")
+async def update_alert(
+    alert_id: str,
+    alert_update: AlertUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    alert = db.query(Alert).filter(Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    
+    if alert_update.status:
+        alert.status = AlertStatus[alert_update.status] # Convert string to Enum
+    if alert_update.assigned_to:
+        alert.assigned_to = alert_update.assigned_to
+    if alert_update.priority:
+        alert.priority = alert_update.priority
+    if alert_update.resolution_notes:
+        alert.resolution_notes = alert_update.resolution_notes
+    
+    db.commit()
+    db.refresh(alert)
+    return {"message": "Alert updated successfully"}
+
+@app.get("/api/cases/", response_model=List[CaseResponse])
+async def get_cases(
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+    assigned_to: Optional[str] = None,
+    limit: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_staff_user) # Changed dependency to staff user
+):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    """Get cases with optional filtering"""
+    query = db.query(Case)
+
+    if status:
+        query = query.filter(Case.status == status)
+    if priority:
+        query = query.filter(Case.priority == priority)
+    if assigned_to:
+        if assigned_to == "me":
+            query = query.filter(Case.assigned_to == current_user.username)
+        elif assigned_to == "unassigned":
+            query = query.filter(Case.assigned_to == None)
+
+    cases = query.options(joinedload(Case.alert)).order_by(desc(Case.created_at))
+    if limit is not None:
+        cases = cases.limit(limit)
+    cases = cases.all()
+
+    return [
+        CaseResponse(
+            id=case.id,
+            case_number=case.case_number,
+            title=case.title,
+            description=case.description,
+            status=case.status.value if hasattr(case.status, 'value') else str(case.status),
+            priority=case.priority,
+            assigned_to=case.assigned_to,
+            created_at=case.created_at,
+            target_completion_date=case.target_completion_date,
+            alert=AlertResponse(
+                id=case.alert.id,
+                alert_type=case.alert.alert_type,
+                risk_score=case.alert.risk_score,
+                status=case.alert.status.value if hasattr(case.alert.status, 'value') else str(case.alert.status),
+                created_at=case.alert.created_at,
+                transaction_id=case.alert.transaction_id,
+                customer_id=case.alert.transaction.customer_id if case.alert.transaction else "",
+                description=case.alert.description,
+                transaction_amount=case.alert.transaction.amount if case.alert.transaction else None,
+                transaction_currency=case.alert.transaction.currency if case.alert.transaction else None,
+            ) if case.alert else None
+        )
+        for case in cases
+    ]
+
+@app.get("/api/cases/{case_id}")
+async def get_case(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    case = db.query(Case).options(joinedload(Case.alert).joinedload(Alert.transaction)).filter(Case.id == case_id).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return case
+
+@app.put("/api/alerts/{alert_id}")
+async def update_alert(
+    alert_id: str,
+    alert_update: AlertUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    alert = db.query(Alert).filter(Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    
+    if alert_update.status:
+        alert.status = AlertStatus[alert_update.status] # Convert string to Enum
+    if alert_update.assigned_to:
+        alert.assigned_to = alert_update.assigned_to
+    if alert_update.priority:
+        alert.priority = alert_update.priority
+    if alert_update.resolution_notes:
+        alert.resolution_notes = alert_update.resolution_notes
+    
+    db.commit()
+    db.refresh(alert)
+    return {"message": "Alert updated successfully"}
+
+@app.get("/api/cases/", response_model=List[CaseResponse])
+async def get_cases(
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+    assigned_to: Optional[str] = None,
+    limit: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_from_cookie) # Or get_current_staff_user
+):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    """Get cases with optional filtering"""
+    query = db.query(Case)
+
+    if status:
+        query = query.filter(Case.status == status)
+    if priority:
+        query = query.filter(Case.priority == priority)
+    if assigned_to:
+        if assigned_to == "me":
+            query = query.filter(Case.assigned_to == current_user.username)
+        elif assigned_to == "unassigned":
+            query = query.filter(Case.assigned_to == None)
+
+    cases = query.options(joinedload(Case.alert)).order_by(desc(Case.created_at))
+    if limit is not None:
+        cases = cases.limit(limit)
+    cases = cases.all()
+
+    return [
+        CaseResponse(
+            id=case.id,
+            case_number=case.case_number,
+            title=case.title,
+            description=case.description,
+            status=case.status.value if hasattr(case.status, 'value') else str(case.status),
+            priority=case.priority,
+            assigned_to=case.assigned_to,
+            created_at=case.created_at,
+            target_completion_date=case.target_completion_date,
+            alert=AlertResponse(
+                id=case.alert.id,
+                alert_type=case.alert.alert_type,
+                risk_score=case.alert.risk_score,
+                status=case.alert.status.value if hasattr(case.alert.status, 'value') else str(case.alert.status),
+                created_at=case.alert.created_at,
+                transaction_id=case.alert.transaction_id,
+                customer_id=case.alert.transaction.customer_id if case.alert.transaction else "",
+                description=case.alert.description,
+                transaction_amount=case.alert.transaction.amount if case.alert.transaction else None,
+                transaction_currency=case.alert.transaction.currency if case.alert.transaction else None,
+            ) if case.alert else None
+        )
+        for case in cases
+    ]
+
+@app.get("/api/cases/{case_id}")
+async def get_case(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    case = db.query(Case).options(joinedload(Case.alert).joinedload(Alert.transaction)).filter(Case.id == case_id).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return case
+
+@app.put("/api/alerts/{alert_id}")
+async def update_alert(
+    alert_id: str,
+    alert_update: AlertUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    alert = db.query(Alert).filter(Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    
+    if alert_update.status:
+        alert.status = AlertStatus[alert_update.status] # Convert string to Enum
+    if alert_update.assigned_to:
+        alert.assigned_to = alert_update.assigned_to
+    if alert_update.priority:
+        alert.priority = alert_update.priority
+    if alert_update.resolution_notes:
+        alert.resolution_notes = alert_update.resolution_notes
+    
+    db.commit()
+    db.refresh(alert)
+    return {"message": "Alert updated successfully"}
 
 @app.put("/api/alerts/{alert_id}")
 async def update_alert(
@@ -1561,6 +2411,195 @@ async def update_alert(
 async def get_alerts_metrics(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
     if isinstance(current_user, RedirectResponse):
         return current_user
+    open_alerts = db.query(Alert).filter(Alert.status == "OPEN").count()
+    closed_alerts = db.query(Alert).filter(Alert.status == "CLOSED").count()
+    total_alerts = open_alerts + closed_alerts
+    sanctions_hits = db.query(Alert).filter(Alert.alert_type == "SANCTIONS_HIT").count()
+    avg_response_time_minutes = db.query(func.avg(Alert.response_time_minutes)).filter(Alert.status == "CLOSED").scalar() or 0.0
+    false_positive_alerts = db.query(Alert).filter(Alert.status == "FALSE_POSITIVE").count()
+    false_positive_rate = (false_positive_alerts / closed_alerts * 100) if closed_alerts > 0 else 0.0
+
+    return {
+        "open_alerts": open_alerts,
+        "closed_alerts": closed_alerts,
+        "total_alerts": total_alerts,
+        "average_risk_score": db.query(func.avg(Alert.risk_score)).scalar() or 0.0,
+        "sanctions_hits": sanctions_hits,
+        "avg_response_time": avg_response_time_minutes / 60, # Convert to hours
+        "false_positive_rate": false_positive_rate
+    }
+
+@app.get("/api/alerts/export")
+async def export_alerts(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    
+    output = "alert_id,alert_type,risk_score,status,created_at,transaction_id,customer_id,description\n"
+    
+    try:
+        alerts = db.query(Alert).options(joinedload(Alert.transaction)).all() # Eager load transaction
+        for alert in alerts:
+            customer_id = alert.transaction.customer_id if alert.transaction else ""
+            transaction_id = alert.transaction_id if alert.transaction_id else ""
+            
+            # Sanitize description to prevent CSV breaking
+            description = alert.description.replace(",", ";").replace("\n", " ").replace("\r", "")
+            
+            output += f'{alert.id},{alert.alert_type},{alert.risk_score},{alert.status},{alert.created_at},{transaction_id},{customer_id},{description}\n'
+        
+        return Response(content=output, media_type="text/csv")
+    except Exception as e:
+        # Re-raise as HTTPException to send a proper error response to the frontend
+        raise HTTPException(status_code=500, detail=f"Failed to export alerts due to an internal server error: {e}")
+
+
+@app.post("/api/alerts/bulk")
+async def bulk_alert_action(
+    action_data: BulkAlertAction,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency)
+):
+    updated_count = 0
+    for alert_id in action_data.alert_ids:
+        alert = db.query(Alert).filter(Alert.id == alert_id).first()
+        if not alert:
+            logger.warning(f"Alert {alert_id} not found for bulk action.")
+            continue
+
+        if action_data.action == "assign" and action_data.assigned_to:
+            alert.assigned_to = action_data.assigned_to
+            updated_count += 1
+        elif action_data.action == "update_status" and action_data.status:
+            alert.status = action_data.status
+            updated_count += 1
+        elif action_data.action == "update_priority" and action_data.priority:
+            alert.priority = action_data.priority
+            updated_count += 1
+        elif action_data.action == "mark_false_positive":
+            alert.status = "FALSE_POSITIVE"
+            updated_count += 1
+        elif action_data.action == "create_cases":
+            # This would typically involve creating a case for each selected alert
+            # For simplicity, we'll just log for now
+            logger.info(f"Creating case for alert {alert_id} (bulk action)")
+            # Example: await case_service.create_case_from_alert(alert_id, db)
+            updated_count += 1
+        
+        if action_data.notes:
+            alert.resolution_notes = action_data.notes # Assuming notes apply to all actions
+
+        db.add(alert)
+    db.commit()
+    return {"message": f"Bulk action completed for {updated_count} alerts.", "updated_count": updated_count}
+
+@app.post("/api/alerts/{alert_id}/assign")
+async def assign_alert(
+    alert_id: str,
+    assign_data: AssignAlert,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency)
+):
+    alert = db.query(Alert).filter(Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    
+    alert.assigned_to = assign_data.user_id
+    db.add(alert)
+    db.commit()
+    return {"message": f"Alert {alert_id} assigned to {assign_data.user_id}"}
+
+@app.get("/api/dashboard/aml-control-summary")
+async def get_aml_control_summary(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    """Get AML control summary"""
+    aml_summary = db.query(
+        Alert.alert_type,
+        func.avg(Alert.risk_score).label('avg_risk'),
+        func.count(Alert.id).label('count')
+    ).group_by(Alert.alert_type).all()
+
+    return [
+        {
+            "control_type": item.alert_type,
+            "average_risk_score": float(item.avg_risk or 0),
+            "triggered_count": item.count
+        }
+        for item in aml_summary
+    ]
+
+
+
+@app.get("/api/dashboard/stats")
+async def get_dashboard_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    """Get dashboard statistics"""
+    today = datetime.now().date()
+    yesterday = today - timedelta(days=1)
+
+    # Transaction stats
+    total_transactions = db.query(Transaction).count()
+    today_transactions = db.query(Transaction).filter(func.date(Transaction.created_at) == today).count()
+    yesterday_transactions = db.query(Transaction).filter(func.date(Transaction.created_at) == yesterday).count()
+    transactions_change = ((today_transactions - yesterday_transactions) / yesterday_transactions * 100) if yesterday_transactions > 0 else 0
+
+    # Alert stats
+    open_alerts = db.query(Alert).filter(Alert.status == "OPEN").count()
+    high_risk_alerts = db.query(Alert).filter(
+        and_(Alert.status == "OPEN", Alert.risk_score >= 0.8)
+    ).count()
+    today_alerts = db.query(Alert).filter(func.date(Alert.created_at) == today).count()
+    yesterday_alerts = db.query(Alert).filter(func.date(Alert.created_at) == yesterday).count()
+    alerts_change = ((today_alerts - yesterday_alerts) / yesterday_alerts * 100) if yesterday_alerts > 0 else 0
+
+    # Case stats
+    cases_opened_today = db.query(Case).filter(func.date(Case.created_at) == today).count()
+    cases_opened_yesterday = db.query(Case).filter(func.date(Case.created_at) == yesterday).count()
+    cases_change = ((cases_opened_today - cases_opened_yesterday) / cases_opened_yesterday * 100) if cases_opened_yesterday > 0 else 0
+
+    # Risk distribution
+    risk_distribution = db.query(
+        Alert.alert_type,
+        func.avg(Alert.risk_score).label('avg_risk'),
+        func.count(Alert.id).label('count')
+    ).group_by(Alert.alert_type).all()
+    
+    # Alert Trends
+    alert_trends = db.query(func.date(Alert.created_at), func.sum(case((Alert.risk_score >= 0.8, 1), else_=0)), func.sum(case((Alert.risk_score >= 0.6, 1), else_=0))).group_by(func.date(Alert.created_at)).order_by(func.date(Alert.created_at)).all()
+
+    response_data = {
+        "total_transactions": total_transactions,
+        "today_transactions": today_transactions,
+        "transactions_change": round(transactions_change, 2),
+        "open_alerts": open_alerts,
+        "high_risk_alerts": high_risk_alerts,
+        "alerts_change": round(alerts_change, 2),
+        "cases_opened_today": cases_opened_today,
+        "cases_change": round(cases_change, 2),
+        "risk_distribution": [
+            {
+                "type": item.alert_type,
+                "avg_risk": float(item.avg_risk or 0),
+                "count": item.count
+            }
+            for item in risk_distribution
+        ],
+        "alert_trends": {
+            "labels": [str(row[0]) for row in alert_trends],
+            "high_risk": [row[1] for row in alert_trends],
+            "medium_risk": [row[2] for row in alert_trends]
+        }
+    }
+    logger.info(f"Dashboard stats: {response_data}")
+    return response_data
+
+
+
+@app.get("/api/cases/metrics")
+async def get_cases_metrics(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
     """Get case management metrics"""
     metrics = await case_service.get_case_metrics(db)
     return metrics
@@ -1569,6 +2608,7 @@ async def get_alerts_metrics(db: Session = Depends(get_db), current_user: User =
 async def get_cases(
     status: Optional[str] = None,
     priority: Optional[str] = None,
+    assigned_to: Optional[str] = None,
     limit: int = 100,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user_from_cookie)
@@ -1582,6 +2622,11 @@ async def get_cases(
         query = query.filter(Case.status == status)
     if priority:
         query = query.filter(Case.priority == priority)
+    if assigned_to:
+        if assigned_to == "me":
+            query = query.filter(Case.assigned_to == current_user.username)
+        elif assigned_to == "unassigned":
+            query = query.filter(Case.assigned_to == None)
     
     cases = query.order_by(desc(Case.created_at)).limit(limit).all()
     
@@ -1602,17 +2647,33 @@ async def update_case(
     return {"message": "Case updated"}
 
 @app.post("/api/cases/")
-async def create_case(case: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
-    new_case = await case_service.create_case(
-        db=db,
-        alert_id=case.get("alert_id"),
-        title=case.get("title"),
-        description=case.get("description"),
-        priority=case.get("priority"),
-        assigned_to=case.get("assigned_to"),
-        investigation_notes=case.get("investigation_notes")
-    )
-    return {"message": "Case created successfully", "case_id": new_case.id}
+async def create_case(
+    case_data: CreateCaseRequest, # Use the Pydantic model
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency)
+):
+    logger.info(f"Creating case with data: {case_data.dict()}") # Log the Pydantic model dict
+    try:
+        new_case = await case_service.create_case(
+            db=db,
+            alert_id=case_data.alert_id,
+            title=case_data.title,
+            description=case_data.description,
+            priority=case_data.priority,
+            assigned_to=case_data.assigned_to,
+            investigation_notes=case_data.investigation_notes,
+            target_completion_date=case_data.target_completion_date # Pass datetime object
+        )
+        return {"message": "Case created successfully", "case_id": new_case.id}
+    except HTTPException as e:
+        logger.error(f"Error creating case: {e.status_code}: {e.detail}")
+        return JSONResponse(status_code=e.status_code, content={"message": e.detail})
+    except ValueError as ve:
+        logger.error(f"Validation error creating case: {ve}")
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        logger.error(f"Error creating case: {e}", exc_info=True) # Log traceback
+        raise HTTPException(status_code=500, detail="Internal Server Error during case creation")
 
 @app.get("/api/cases/{case_id}")
 async def get_case(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
@@ -1631,6 +2692,7 @@ async def export_cases(db: Session = Depends(get_db), current_user: User = Depen
 
 @app.get("/api/cases/distribution")
 async def get_case_distribution(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    logger.info("Getting case distribution")
     if isinstance(current_user, RedirectResponse):
         return current_user
     case_distribution = db.query(
@@ -1642,6 +2704,7 @@ async def get_case_distribution(db: Session = Depends(get_db), current_user: Use
         "labels": [item.status.value for item in case_distribution],
         "data": [item.count for item in case_distribution]
     }
+
 
 
 
@@ -1692,13 +2755,73 @@ async def generate_sar_report(
         "alerts": report_data
     }
 
+def apply_report_filters(query, filters: ReportFilters, db: Session):
+    start_date_filter = None
+    end_date_filter = None
+
+    if filters.report_period:
+        current_time = datetime.now()
+        if filters.report_period == "today":
+            start_date_filter = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_date_filter = current_time
+        elif filters.report_period == "7d":
+            start_date_filter = current_time - timedelta(days=7)
+            end_date_filter = current_time
+        elif filters.report_period == "30d":
+            start_date_filter = current_time - timedelta(days=30)
+            end_date_filter = current_time
+        elif filters.report_period == "90d":
+            start_date_filter = current_time - timedelta(days=90)
+            end_date_filter = current_time
+        elif filters.report_period == "year":
+            start_date_filter = current_time.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+            end_date_filter = current_time
+    elif filters.start_date and filters.end_date:
+        try:
+            start_date_filter = datetime.fromisoformat(filters.start_date)
+            end_date_filter = datetime.fromisoformat(filters.end_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format for start_date or end_date. Use ISO format (YYYY-MM-DD).")
+
+    if start_date_filter and end_date_filter:
+        query = query.filter(and_(Transaction.created_at >= start_date_filter, Transaction.created_at <= end_date_filter))
+
+    if filters.risk_level:
+        if filters.risk_level == "low":
+            query = query.filter(Alert.risk_score < 0.4)
+        elif filters.risk_level == "medium":
+            query = query.filter(and_(Alert.risk_score >= 0.4, Alert.risk_score < 0.7))
+        elif filters.risk_level == "high":
+            query = query.filter(and_(Alert.risk_score >= 0.7, Alert.risk_score < 0.9))
+        elif filters.risk_level == "critical":
+            query = query.filter(Alert.risk_score >= 0.9)
+            
+    if filters.currency:
+        query = query.filter(Transaction.currency == filters.currency)
+
+    return query
+
 @app.get("/api/reports/executive-summary")
-async def get_executive_summary(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
-    total_transactions = db.query(Transaction).count()
-    total_volume = db.query(func.sum(Transaction.base_amount)).scalar()
-    alerts_generated = db.query(Alert).count()
-    cases_opened = db.query(Case).count()
-    sars_filed = db.query(Case).filter(Case.sar_filed == True).count()
+async def get_executive_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+    filters: ReportFilters = Depends(get_report_filters),
+):
+    transaction_query = db.query(Transaction)
+    alert_query = db.query(Alert)
+    case_query = db.query(Case)
+
+    if filters:
+        transaction_query = apply_report_filters(transaction_query, filters, db)
+        alert_query = apply_report_filters(alert_query.join(Transaction), filters, db)
+        case_query = apply_report_filters(case_query.join(Alert).join(Transaction), filters, db)
+
+    total_transactions = transaction_query.count()
+    total_volume = transaction_query.with_entities(func.sum(Transaction.base_amount)).scalar()
+    alerts_generated = alert_query.count()
+    cases_opened = case_query.count()
+    sars_filed = case_query.filter(Case.sar_filed == True).count()
+    
     return {
         "total_transactions": total_transactions,
         "total_volume": total_volume,
@@ -1715,25 +2838,45 @@ async def get_executive_summary(db: Session = Depends(get_db), current_user: Use
     }
 
 @app.get("/api/reports/charts-data")
-async def get_charts_data(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
+async def get_charts_data(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+    filters: ReportFilters = Depends(get_report_filters),
+):
+    transaction_query = db.query(Transaction)
+    alert_query = db.query(Alert)
+    customer_query = db.query(Customer)
+
+    if filters:
+        transaction_query = apply_report_filters(transaction_query, filters, db)
+        alert_query = apply_report_filters(alert_query.join(Transaction), filters, db)
+        # customer_query is not filtered by date, risk, or currency
+
     # Volume Trends
-    volume_trends = db.query(func.date(Transaction.created_at), func.sum(Transaction.base_amount), func.sum(case((Transaction.risk_score >= 0.7, Transaction.base_amount), else_=0)) ).group_by(func.date(Transaction.created_at)).order_by(func.date(Transaction.created_at)).all()
+    volume_trends_query = apply_report_filters(db.query(func.date(Transaction.created_at), func.sum(Transaction.base_amount), func.sum(case((Transaction.risk_score >= 0.7, Transaction.base_amount), else_=0)) ), filters, db)
+    volume_trends = volume_trends_query.group_by(func.date(Transaction.created_at)).order_by(func.date(Transaction.created_at)).all()
     
     # Alert Distribution
-    alert_distribution = db.query(Alert.alert_type, func.count(Alert.id)).group_by(Alert.alert_type).all()
+    alert_distribution_query = db.query(Alert.alert_type, func.count(Alert.id)).join(Transaction, Alert.transaction_id == Transaction.id)
+    alert_distribution_query = apply_report_filters(alert_distribution_query, filters, db)
+    alert_distribution = alert_distribution_query.group_by(Alert.alert_type).all()
     
     # Risk Trends
-    risk_trends = db.query(func.date(Alert.created_at), func.sum(case((Alert.risk_score >= 0.9, 1), else_=0)), func.sum(case((Alert.risk_score >= 0.7, 1), else_=0)), func.sum(case((Alert.risk_score >= 0.4, 1), else_=0))).group_by(func.date(Alert.created_at)).order_by(func.date(Alert.created_at)).all()
+    risk_trends_query = db.query(func.date(Alert.created_at), func.sum(case((Alert.risk_score >= 0.9, 1), else_=0)), func.sum(case((Alert.risk_score >= 0.7, 1), else_=0)), func.sum(case((Alert.risk_score >= 0.4, 1), else_=0))).join(Transaction, Alert.transaction_id == Transaction.id)
+    risk_trends_query = apply_report_filters(risk_trends_query, filters, db)
+    risk_trends = risk_trends_query.group_by(func.date(Alert.created_at)).order_by(func.date(Alert.created_at)).all()
     
     # Channel Analysis
-    channel_analysis = db.query(Transaction.channel, func.count(Transaction.id)).group_by(Transaction.channel).all()
+    channel_analysis_query = apply_report_filters(db.query(Transaction.channel, func.count(Transaction.id)), filters, db)
+    channel_analysis = channel_analysis_query.group_by(Transaction.channel).all()
     
     # Customer Risk
-    customer_risk = db.query(Customer.risk_rating, func.count(Customer.id)).group_by(Customer.risk_rating).all()
+    customer_risk = customer_query.group_by(Customer.risk_rating).with_entities(Customer.risk_rating, func.count(Customer.id)).all()
     
     customer_risk_data = {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "CRITICAL": 0}
     for rating, count in customer_risk:
-        customer_risk_data[rating.value] = count
+        if rating:
+            customer_risk_data[rating.value] = count
 
     return {
         "volume_trends": {
@@ -1762,10 +2905,19 @@ async def get_charts_data(db: Session = Depends(get_db), current_user: User = De
     }
 
 @app.get("/api/reports/{tab_name}")
-async def get_report_tab_data(tab_name: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
+async def get_report_tab_data(
+    tab_name: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+    filters: ReportFilters = Depends(get_report_filters),
+):
     if tab_name == "alerts_report":
-        alert_summary = db.query(Alert.alert_type, func.count(Alert.id), func.avg(Alert.risk_score), func.avg(case((Alert.status == 'CLOSED', 1), else_=0))).group_by(Alert.alert_type).all()
-        top_risk_customers = db.query(Transaction.customer_id, func.count(Alert.id), func.max(Alert.risk_score), Customer.status).join(Alert.transaction).join(Customer).group_by(Transaction.customer_id, Customer.status).order_by(func.max(Alert.risk_score).desc()).limit(10).all()
+        alert_summary_query = apply_report_filters(db.query(Alert.alert_type, func.count(Alert.id), func.avg(Alert.risk_score), func.avg(case((Alert.status == 'CLOSED', 1), else_=0))), filters, db)
+        alert_summary = alert_summary_query.group_by(Alert.alert_type).all()
+        
+        top_risk_customers_query = apply_report_filters(db.query(Transaction.customer_id, func.count(Alert.id), func.max(Alert.risk_score), Customer.status).join(Alert.transaction).join(Customer), filters, db)
+        top_risk_customers = top_risk_customers_query.group_by(Transaction.customer_id, Customer.status).order_by(func.max(Alert.risk_score).desc()).limit(10).all()
+        
         return {
             "alert_summary": [
                 {"alert_type": row[0], "count": row[1], "avg_risk_score": row[2], "resolution_rate": row[3] * 100 if row[3] else 0} for row in alert_summary
@@ -1775,28 +2927,31 @@ async def get_report_tab_data(tab_name: str, db: Session = Depends(get_db), curr
             ]
         }
     elif tab_name == "transactions_report":
-        high_value_transactions = db.query(Transaction).filter(Transaction.is_high_value == True).order_by(desc(Transaction.created_at)).limit(100).all()
+        high_value_transactions_query = apply_report_filters(db.query(Transaction).filter(Transaction.is_high_value == True), filters, db)
+        high_value_transactions = high_value_transactions_query.order_by(desc(Transaction.created_at)).limit(100).all()
         return {"high_value_transactions": high_value_transactions}
     elif tab_name == "customers_report":
-        pep_customers = db.query(Customer).filter(Customer.is_pep == True).order_by(desc(Customer.last_review_date)).limit(100).all()
+        pep_customers_query = apply_report_filters(db.query(Customer).filter(Customer.is_pep == True), filters, db)
+        pep_customers = pep_customers_query.order_by(desc(Customer.last_review_date)).limit(100).all()
         return {"pep_customers": pep_customers}
     elif tab_name == "compliance_report":
-        # Calculate actual compliance metrics
-        total_alerts = db.query(Alert).count()
-        closed_alerts = db.query(Alert).filter(Alert.status == "CLOSED").count()
-        total_cases = db.query(Case).count()
-        closed_cases = db.query(Case).filter(Case.status == "CLOSED").count()
-        sars_filed = db.query(Case).filter(Case.sar_filed == True).count()
+        alert_query = apply_report_filters(db.query(Alert), filters, db)
+        case_query = apply_report_filters(db.query(Case), filters, db)
 
-        # Placeholder calculations for now, replace with actual logic if data available
+        total_alerts = alert_query.count()
+        closed_alerts = alert_query.filter(Alert.status == "CLOSED").count()
+        total_cases = case_query.count()
+        closed_cases = case_query.filter(Case.status == "CLOSED").count()
+        sars_filed = case_query.filter(Case.sar_filed == True).count()
+
         alert_response_sla = (closed_alerts / total_alerts * 100) if total_alerts > 0 else 100
         case_resolution_sla = (closed_cases / total_cases * 100) if total_cases > 0 else 100
         sar_filing_sla = 90 # Placeholder
         total_sars = sars_filed
         total_ctrs = 0 # Placeholder
         sanctions_coverage = 100 # Placeholder
-        false_positive_rate = db.query(func.count(Alert.id)).filter(Alert.status == "FALSE_POSITIVE").scalar() / closed_alerts * 100 if closed_alerts > 0 else 0.0
-        investigation_rate = (db.query(func.count(Alert.id)).filter(Alert.status == "INVESTIGATING").scalar() + closed_alerts) / total_alerts * 100 if total_alerts > 0 else 0.0
+        false_positive_rate = alert_query.filter(Alert.status == "FALSE_POSITIVE").count() / closed_alerts * 100 if closed_alerts > 0 else 0.0
+        investigation_rate = (alert_query.filter(Alert.status == "INVESTIGATING").count() + closed_alerts) / total_alerts * 100 if total_alerts > 0 else 0.0
         system_uptime = 99.9 # Placeholder
 
         return {
@@ -1813,6 +2968,10 @@ async def get_report_tab_data(tab_name: str, db: Session = Depends(get_db), curr
             }
         }
     return {}
+
+@app.get("/api/test")
+async def test_endpoint():
+    return {"message": "test"}
 
 @app.post("/api/reports/generate")
 async def generate_report(report: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
@@ -1834,7 +2993,7 @@ async def generate_report(report: dict, db: Session = Depends(get_db), current_u
             customer = db.query(Customer).filter(
                 Customer.customer_id == transaction.customer_id
             ).first()
-            output += f"{alert.id},{transaction.id},{customer.full_name if customer else 'Unknown'},{transaction.account_number},{transaction.amount},{transaction.currency},{alert.risk_score},{alert.alert_type},{alert.description},{alert.created_at}\n"
+            output += f'{alert.id},{transaction.id},{customer.full_name if customer else "Unknown"},{transaction.account_number},{transaction.amount},{transaction.currency},{alert.risk_score},{alert.alert_type},{alert.description},{alert.created_at}\n'
         return Response(content=output, media_type="text/csv")
     
     return {"message": "Report generated successfully"}
@@ -2255,7 +3414,7 @@ async def make_customer_transfer(
         reference=credit_transaction_data.reference,
         narrative=credit_transaction_data.narrative,
         processed_by=f"customer:{current_customer.username}",
-        status=TransactionStatus.PENDING
+        status=TransactionStatus.COMPLETED # Credit is completed immediately
     )
     db.add(db_credit_transaction)
     db.commit()
