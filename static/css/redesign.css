@@ -298,6 +298,75 @@ body {
     border-bottom: none;
 }
 
+/* Transaction Stream Styling */
+.transaction-stream {
+    height: 400px; /* Fixed height for the transaction stream */
+    overflow-y: auto; /* Enable scrolling for overflow */
+    border: 1px solid #e0e6ed;
+    border-radius: 8px;
+    padding: 15px;
+    background-color: #fff;
+}
+
+.transaction-item {
+    padding: 10px 0;
+    border-bottom: 1px solid #f0f0f0;
+    display: flex;
+    flex-direction: column;
+}
+
+.transaction-item:last-child {
+    border-bottom: none;
+}
+
+.transaction-item .transaction-flow {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    margin-bottom: 5px;
+}
+
+.transaction-item .flow-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    flex: 1;
+}
+
+.transaction-item .flow-icon {
+    font-size: 1.5em;
+    color: #007bff;
+    margin-bottom: 5px;
+}
+
+.transaction-item .flow-label {
+    font-size: 0.9em;
+    color: #34495e;
+}
+
+.transaction-item .transaction-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8em;
+    color: #6c757d;
+    margin-top: 5px;
+}
+
+.transaction-item .ml-prediction {
+    background-color: #e9f7ef;
+    color: #28a745;
+    padding: 3px 8px;
+    border-radius: 5px;
+    font-weight: 500;
+}
+
+/* Risk-based styling for transaction items */
+.transaction-item.risk-low .flow-icon { color: #28a745; }
+.transaction-item.risk-medium .flow-icon { color: #ffc107; }
+.transaction-item.risk-high .flow-icon { color: #fd7e14; }
+.transaction-item.risk-critical .flow-icon { color: #dc3545; }
+
 /* Modal Styling */
 .modal-content {
     border-radius: 10px;

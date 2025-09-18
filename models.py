@@ -154,7 +154,7 @@ class Alert(Base):
     __tablename__ = "alerts"
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    transaction_id = Column(String(36), ForeignKey("transactions.id"), nullable=False, index=True)
+    transaction_id = Column(String(36), ForeignKey("transactions.id"), nullable=False,index=True) 
     alert_type = Column(String(255), nullable=False, index=True)
     risk_score = Column(Float, nullable=False)
     priority = Column(String(255), default="MEDIUM")  # LOW, MEDIUM, HIGH, CRITICAL

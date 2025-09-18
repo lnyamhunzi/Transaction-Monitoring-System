@@ -6,10 +6,10 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, WebSocket, WebSocketDisconnect, Request, Response, Form, File, UploadFile
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, WebSocket, WebSocketDisconnect, Request, Response, Form, File, UploadFile, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
@@ -246,6 +246,61 @@ app.add_middleware(
 # Static files and templates
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 templates = Jinja2Templates(directory="templates")
+
+# Custom Jinja2 filters
+def get_risk_level_filter(risk_score):
+    if risk_score >= 0.9:
+        return "critical"
+    elif risk_score >= 0.7:
+        return "high"
+    elif risk_score >= 0.4:
+        return "medium"
+    else:
+        return "low"
+
+def format_currency_filter(amount, currency="USD"):
+    return f"{amount:,.2f} {currency}"
+
+def format_date_filter(dt):
+    if not dt:
+        return "N/A"
+    if isinstance(dt, str):
+        try:
+            dt = datetime.fromisoformat(dt)
+        except ValueError:
+            return dt # Return original string if it's not a valid isoformat
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+def calculate_sla_status_filter(sla_deadline, return_type="class"):
+    if not sla_deadline:
+        return {"class": "unknown", "text": "No SLA"}[return_type]
+
+    if isinstance(sla_deadline, str):
+        try:
+            sla_deadline = datetime.fromisoformat(sla_deadline)
+        except ValueError:
+            return {"class": "unknown", "text": "Invalid Date"}[return_type] # Handle invalid string
+
+    now = datetime.now()
+    time_diff = sla_deadline - now
+    diff_hours = time_diff.total_seconds() / 3600
+
+    if diff_hours < 0:
+        status_class = "overdue"
+        status_text = "Overdue"
+    elif diff_hours < 4:
+        status_class = "due-soon"
+        status_text = "Due Soon"
+    else:
+        status_class = "on-track"
+        status_text = "On Track"
+    
+    return {"class": status_class, "text": status_text}[return_type]
+
+templates.env.filters["get_risk_level"] = get_risk_level_filter
+templates.env.filters["format_currency"] = format_currency_filter
+templates.env.filters["format_date"] = format_date_filter
+templates.env.filters["calculate_sla_status"] = calculate_sla_status_filter
 
 def risklevel(risk_score: float) -> str:
     if risk_score >= 0.9:
@@ -634,10 +689,71 @@ async def case_management(request: Request, current_user: User = Depends(get_cur
     return templates.TemplateResponse("case-management.html", {"request": request, "user": current_user})
 
 @app.get("/alerts", response_class=HTMLResponse)
-async def alerts_view(request: Request, current_user: User = Depends(get_current_user_from_cookie)):
+async def alerts_view(
+    request: Request,
+    current_user: User = Depends(get_current_user_from_cookie),
+    db: Session = Depends(get_db),
+    status: Optional[AlertStatus] = Query(None),
+    risk_score_min: Optional[float] = Query(None, alias="riskScoreMin"),
+    risk_score_max: Optional[float] = Query(None, alias="riskScoreMax"),
+    alert_type: Optional[str] = Query(None, alias="alertType"),
+    priority: Optional[str] = Query(None)
+):
     if isinstance(current_user, RedirectResponse):
         return current_user
-    return templates.TemplateResponse("alerts.html", {"request": request, "user": current_user})
+
+    query = db.query(Alert)
+
+    if status:
+        query = query.filter(Alert.status == status)
+    if risk_score_min is not None:
+        query = query.filter(Alert.risk_score >= risk_score_min)
+    if risk_score_max is not None:
+        query = query.filter(Alert.risk_score <= risk_score_max)
+    if alert_type:
+        query = query.filter(Alert.alert_type == alert_type)
+    if priority:
+        query = query.filter(Alert.priority == priority)
+
+    alerts = query.all()
+
+    # Convert SQLAlchemy Alert objects to dictionaries for JSON serialization
+    alerts_data = []
+    for alert in alerts:
+        alert_dict = {
+            "id": alert.id,
+            "transaction_id": alert.transaction_id,
+            "alert_type": alert.alert_type,
+            "risk_score": alert.risk_score,
+            "priority": alert.priority,
+            "status": alert.status.name, # Convert Enum to string
+            "description": alert.description,
+            "created_at": alert.created_at.isoformat() if alert.created_at else None,
+            "assigned_to": alert.assigned_to,
+            "sla_deadline": alert.sla_deadline.isoformat() if alert.sla_deadline else None,
+            "customer_id": alert.transaction.customer_id if alert.transaction else None, # Access customer_id via transaction
+            "transaction": {
+                "amount": alert.transaction.amount,
+                "currency": alert.transaction.currency,
+                "channel": alert.transaction.channel,
+                "transaction_type": alert.transaction.transaction_type,
+                "counterparty_name": alert.transaction.counterparty_name,
+                "customer_id": alert.transaction.customer_id,
+            } if alert.transaction else None,
+        }
+        alerts_data.append(alert_dict)
+
+    return templates.TemplateResponse("alerts.html", {
+        "request": request,
+        "user": current_user,
+        "alerts": alerts_data, # Pass the list of dictionaries
+        "AlertStatus": AlertStatus, # Pass AlertStatus enum to template for dropdowns
+        "current_status": status,
+        "current_risk_score_min": risk_score_min,
+        "current_risk_score_max": risk_score_max,
+        "current_alert_type": alert_type,
+        "current_priority": priority
+    })
 
 @app.get("/reports", response_class=HTMLResponse)
 async def reports_view(request: Request, current_user: User = Depends(get_current_user_from_cookie)):
@@ -1435,7 +1551,8 @@ async def simulate_unusual_incoming_transaction(
             "transaction_type": "CREDIT",
             "channel": "Simulated_Unusual",
             "id": str(db_transaction.id) # Pass transaction ID for logging
-        }
+        },
+        manager # Pass the manager object
     )
 
     logger.info(f"Simulated unusual incoming transaction for customer {customer_id} with amount {amount}.")
@@ -1530,7 +1647,8 @@ async def create_admin_self_transaction(
     background_tasks.add_task(
         process_transaction_controls,
         db_transaction.id,
-        transaction_data
+        transaction_data,
+        manager # Pass the manager object
     )
 
     return {"message": "Admin self-posting transaction created successfully", "transaction_id": db_transaction.id}
@@ -1728,20 +1846,118 @@ async def get_recent_transactions(db: Session = Depends(get_db), limit: int = 50
     ]
 
 @app.get("/api/monitoring/alerts/recent")
-async def get_recent_alerts(db: Session = Depends(get_db), limit: int = 50, current_user: User = Depends(get_current_user_dependency)):
-    alerts = db.query(Alert).order_by(desc(Alert.created_at)).limit(limit).all()
-    return [
-        {
-            "id": str(a.id),
-            "alert_type": a.alert_type,
-            "risk_score": a.risk_score,
-            "description": a.description,
-            "customer_id": a.transaction.customer_id if a.transaction else None,
-            "timestamp": a.created_at.isoformat()
-        } for a in alerts
-    ]
+async def get_recent_alerts(
+    db: Session = Depends(get_db),
+    status: Optional[str] = None,
+    alert_type: Optional[str] = None,
+    risk_level: Optional[str] = None,
+    priority: Optional[str] = None,
+    time_range: Optional[str] = None, # Renamed from date_range to time_range for consistency
+    assigned_to: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 50,
+    current_user: User = Depends(get_current_user_dependency)
+):
+    query = db.query(Alert).options(joinedload(Alert.transaction)).filter(Alert.transaction != None)
+
+    if status:
+        query = query.filter(Alert.status == status)
+    if alert_type:
+        query = query.filter(Alert.alert_type == alert_type)
+    if priority:
+        query = query.filter(Alert.priority == priority)
+    if assigned_to:
+        if assigned_to == "me":
+            query = query.filter(Alert.assigned_to == current_user.username)
+        elif assigned_to == "unassigned":
+            query = query.filter(Alert.assigned_to == None)
+
+    # Handle time_range and custom date range
+    if time_range:
+        current_time = datetime.now()
+        if time_range == "today":
+            start_date_filter = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_date_filter = current_time
+        elif time_range == "7d":
+            start_date_filter = current_time - timedelta(days=7)
+            end_date_filter = current_time
+        elif time_range == "30d":
+            start_date_filter = current_time - timedelta(days=30)
+            end_date_filter = current_time
+        elif time_range == "90d":
+            start_date_filter = current_time - timedelta(days=90)
+            end_date_filter = current_time
+        else: # Default to 24h if time_range is not recognized
+            start_date_filter = current_time - timedelta(hours=24)
+            end_date_filter = current_time
+        query = query.filter(Alert.created_at.between(start_date_filter, end_date_filter))
+    elif start_date and end_date:
+        try:
+            start_date_filter = datetime.fromisoformat(start_date)
+            end_date_filter = datetime.fromisoformat(end_date)
+            query = query.filter(Alert.created_at.between(start_date_filter, end_date_filter))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format for start_date or end_date. Use ISO format (YYYY-MM-DD).")
+
+    if risk_level:
+        if risk_level == "low":
+            query = query.filter(Alert.risk_score < 0.4)
+        elif risk_level == "medium":
+            query = query.filter(and_(Alert.risk_score >= 0.4, Alert.risk_score < 0.7))
+        elif risk_level == "high":
+            query = query.filter(and_(Alert.risk_score >= 0.7, Alert.risk_score < 0.9))
+        elif risk_level == "critical":
+            query = query.filter(Alert.risk_score >= 0.9)
+
+    alerts = query.order_by(desc(Alert.created_at))
+    if limit is not None:
+        alerts = alerts.limit(limit)
+    alerts = alerts.all()
 
 
+
+@app.get("/api/alerts/metrics")
+async def get_alert_metrics(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+    status: Optional[AlertStatus] = Query(None),
+    risk_score_min: Optional[float] = Query(None, alias="riskScoreMin"),
+    risk_score_max: Optional[float] = Query(None, alias="riskScoreMax"),
+    alert_type: Optional[str] = Query(None, alias="alertType"),
+    priority: Optional[str] = Query(None)
+):
+    base_query = db.query(Alert)
+
+    if status:
+        base_query = base_query.filter(Alert.status == status)
+    if risk_score_min is not None:
+        base_query = base_query.filter(Alert.risk_score >= risk_score_min)
+    if risk_score_max is not None:
+        base_query = base_query.filter(Alert.risk_score <= risk_score_max)
+    if alert_type:
+        base_query = base_query.filter(Alert.alert_type == alert_type)
+    if priority:
+        base_query = base_query.filter(Alert.priority == priority)
+
+    total_alerts = base_query.count()
+    open_alerts = base_query.filter(Alert.status == AlertStatus.OPEN).count()
+    high_risk_alerts = base_query.filter(Alert.risk_score >= 0.7).count()
+    sanctions_hits = base_query.filter(Alert.alert_type == "SANCTIONS_HIT").count()
+
+    # Placeholder for avg_response_time and false_positive_rate
+    # In a real system, these would be calculated based on historical data
+    avg_response_time = 0.0 # Placeholder
+    false_positive_rate = 0.0 # Placeholder
+
+    return {
+        "total_alerts": total_alerts,
+        "open_alerts": open_alerts,
+        "high_risk_alerts": high_risk_alerts,
+        "sanctions_hits": sanctions_hits,
+        "avg_response_time": avg_response_time,
+        "false_positive_rate": false_positive_rate
+    }
 
 @app.get("/api/admin/transactions/recent")
 async def get_admin_recent_transactions(db: Session = Depends(get_db), limit: int = 100, time_range: str = "30d"):
@@ -1958,9 +2174,6 @@ async def export_logs(current_user: User = Depends(get_current_user_dependency))
     dummy_log_content += f"{datetime.now().isoformat()},WARNING,Dummy warning message\n"
     return Response(content=dummy_log_content, media_type="text/csv")
 
-
-
-
 @app.post("/api/transactions/")
 async def create_transaction(
     transaction: TransactionCreate,
@@ -2017,16 +2230,16 @@ async def get_alerts(
     risk_level: Optional[str] = None,
     priority: Optional[str] = None,
     assigned_to: Optional[str] = None,
-    start_date: Optional[str] = None, # Added for custom date range
-    end_date: Optional[str] = None,   # Added for custom date range
-    limit: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 1000, # Increased default limit
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_staff_user) # Changed dependency to staff user
 ):
     if isinstance(current_user, RedirectResponse):
         return current_user
     """Get alerts with optional filtering"""
-    query = db.query(Alert)
+    query = db.query(Alert).options(joinedload(Alert.transaction)) # Ensure transaction is always joined
     
     if status:
         query = query.filter(Alert.status == status)
@@ -2113,61 +2326,7 @@ class AlertUpdate(BaseModel):
     priority: Optional[str] = None
     resolution_notes: Optional[str] = None
 
-@app.get("/api/cases/", response_model=List[CaseResponse])
-async def get_cases(
-    status: Optional[str] = None,
-    priority: Optional[str] = None,
-    assigned_to: Optional[str] = None,
-    limit: Optional[int] = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_staff_user) # Use staff user dependency
-):
-    if isinstance(current_user, RedirectResponse):
-        return current_user
-    """Get cases with optional filtering"""
-    query = db.query(Case).options(joinedload(Case.alert).joinedload(Alert.transaction)) # Eager load alert and transaction
 
-    if status:
-        query = query.filter(Case.status == status)
-    if priority:
-        query = query.filter(Case.priority == priority)
-    if assigned_to:
-        if assigned_to == "me":
-            query = query.filter(Case.assigned_to == current_user.username)
-        elif assigned_to == "unassigned":
-            query = query.filter(Case.assigned_to == None)
-
-    cases = query.order_by(desc(Case.created_at))
-    if limit is not None:
-        cases = cases.limit(limit)
-    cases = cases.all()
-
-    return [
-        CaseResponse(
-            id=case.id,
-            case_number=case.case_number,
-            title=case.title,
-            description=case.description,
-            status=case.status.value if hasattr(case.status, 'value') else str(case.status),
-            priority=case.priority,
-            assigned_to=case.assigned_to,
-            created_at=case.created_at,
-            target_completion_date=case.target_completion_date,
-            alert=AlertResponse(
-                id=case.alert.id,
-                alert_type=case.alert.alert_type,
-                risk_score=case.alert.risk_score,
-                status=case.alert.status.value if hasattr(case.alert.status, 'value') else str(case.alert.status),
-                created_at=case.alert.created_at,
-                transaction_id=case.alert.transaction_id,
-                customer_id=case.alert.transaction.customer_id if case.alert.transaction else "",
-                description=case.alert.description,
-                transaction_amount=case.alert.transaction.amount if case.alert.transaction else None,
-                transaction_currency=case.alert.transaction.currency if case.alert.transaction else None,
-            ) if case.alert else None
-        )
-        for case in cases
-    ]
 
 @app.get("/api/cases/{case_id}")
 async def get_case(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
@@ -2380,54 +2539,133 @@ async def update_alert(
     db.refresh(alert)
     return {"message": "Alert updated successfully"}
 
-@app.put("/api/alerts/{alert_id}")
-async def update_alert(
-    alert_id: str,
-    alert_update: AlertUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_from_cookie)
-):
-    if isinstance(current_user, RedirectResponse):
-        return current_user
-    alert = db.query(Alert).filter(Alert.id == alert_id).first()
-    if not alert:
-        raise HTTPException(status_code=404, detail="Alert not found")
 
-    if alert_update.status:
-        alert.status = alert_update.status
-    if alert_update.assigned_to:
-        alert.assigned_to = alert_update.assigned_to
-    if alert_update.priority:
-        alert.priority = alert_update.priority
-    if alert_update.resolution_notes:
-        alert.resolution_notes = alert_update.resolution_notes
 
-    db.add(alert)
-    db.commit()
-    db.refresh(alert)
-    return {"message": "Alert updated successfully", "alert_id": alert.id}
+@app.get("/api/test-metrics")
+async def test_metrics():
+    return {"message": "Test metrics endpoint is working!"}
 
 @app.get("/api/alerts/metrics")
-async def get_alerts_metrics(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
-    if isinstance(current_user, RedirectResponse):
-        return current_user
-    open_alerts = db.query(Alert).filter(Alert.status == "OPEN").count()
-    closed_alerts = db.query(Alert).filter(Alert.status == "CLOSED").count()
-    total_alerts = open_alerts + closed_alerts
-    sanctions_hits = db.query(Alert).filter(Alert.alert_type == "SANCTIONS_HIT").count()
-    avg_response_time_minutes = db.query(func.avg(Alert.response_time_minutes)).filter(Alert.status == "CLOSED").scalar() or 0.0
-    false_positive_alerts = db.query(Alert).filter(Alert.status == "FALSE_POSITIVE").count()
-    false_positive_rate = (false_positive_alerts / closed_alerts * 100) if closed_alerts > 0 else 0.0
+async def get_alerts_metrics(
+    db: Session = Depends(get_db),
+    status: Optional[str] = None,
+    alert_type: Optional[str] = None,
+    risk_level: Optional[str] = None,
+    priority: Optional[str] = None,
+    time_range: Optional[str] = None,
+    assigned_to: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: User = Depends(get_current_staff_user) # Changed dependency
+):
+    """Get alert metrics for dashboard with filtering"""
+    try:
+        base_query = db.query(Alert).options(joinedload(Alert.transaction))
 
-    return {
-        "open_alerts": open_alerts,
-        "closed_alerts": closed_alerts,
-        "total_alerts": total_alerts,
-        "average_risk_score": db.query(func.avg(Alert.risk_score)).scalar() or 0.0,
-        "sanctions_hits": sanctions_hits,
-        "avg_response_time": avg_response_time_minutes / 60, # Convert to hours
-        "false_positive_rate": false_positive_rate
-    }
+        # Apply filters to the base query
+        if status:
+            base_query = base_query.filter(Alert.status == status)
+        if alert_type:
+            base_query = base_query.filter(Alert.alert_type == alert_type)
+        if priority:
+            base_query = base_query.filter(Alert.priority == priority)
+        if assigned_to:
+            if assigned_to == "me":
+                base_query = base_query.filter(Alert.assigned_to == current_user.username)
+            elif assigned_to == "unassigned":
+                base_query = base_query.filter(Alert.assigned_to == None)
+
+        # Handle time_range and custom date range
+        if time_range:
+            current_time = datetime.now()
+            if time_range == "today":
+                start_date_filter = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+                end_date_filter = current_time
+            elif time_range == "7d":
+                start_date_filter = current_time - timedelta(days=7)
+                end_date_filter = current_time
+            elif time_range == "30d":
+                start_date_filter = current_time - timedelta(days=30)
+                end_date_filter = current_time
+            elif time_range == "90d":
+                start_date_filter = current_time - timedelta(days=90)
+                end_date_filter = current_time
+            else: # Default to 24h if time_range is not recognized
+                start_date_filter = current_time - timedelta(hours=24)
+                end_date_filter = current_time
+            base_query = base_query.filter(Alert.created_at.between(start_date_filter, end_date_filter))
+        elif start_date and end_date:
+            try:
+                start_date_filter = datetime.fromisoformat(start_date)
+                end_date_filter = datetime.fromisoformat(end_date)
+                base_query = base_query.filter(Alert.created_at.between(start_date_filter, end_date_filter))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid date format for start_date or end_date. Use ISO format (YYYY-MM-DD).")
+
+        if risk_level:
+            if risk_level == "low":
+                base_query = base_query.filter(Alert.risk_score < 0.4)
+            elif risk_level == "medium":
+                base_query = base_query.filter(and_(Alert.risk_score >= 0.4, Alert.risk_score < 0.7))
+            elif risk_level == "high":
+                base_query = base_query.filter(and_(Alert.risk_score >= 0.7, Alert.risk_score < 0.9))
+            elif risk_level == "critical":
+                base_query = base_query.filter(and_(Alert.risk_score >= 0.9))
+
+        # Calculate metrics from the filtered query
+        total_alerts = base_query.count()
+        open_alerts = base_query.filter(Alert.status == "OPEN").count()
+        high_risk_alerts = base_query.filter(Alert.risk_score >= 0.7).count()
+        sanctions_hits = base_query.filter(Alert.alert_type == "SANCTIONS_HIT").count()
+        
+        # Calculate average response time (placeholder logic)
+        closed_alerts = base_query.filter(Alert.status.in_(["CLOSED", "FALSE_POSITIVE"])).all()
+        response_times = []
+        for alert in closed_alerts:
+            if alert.resolved_at and alert.created_at:
+                response_time = (alert.resolved_at - alert.created_at).total_seconds() / 3600  # hours
+                response_times.append(response_time)
+        
+        avg_response_time = sum(response_times) / len(response_times) if response_times else 0
+        
+        # Calculate false positive rate
+        false_positives = base_query.filter(Alert.status == "FALSE_POSITIVE").count()
+        total_closed = base_query.filter(Alert.status.in_(["CLOSED", "FALSE_POSITIVE"])).count()
+        false_positive_rate = (false_positives / total_closed * 100) if total_closed > 0 else 0
+        
+        return {
+            "total_alerts": total_alerts,
+            "open_alerts": open_alerts,
+            "high_risk_alerts": high_risk_alerts,
+            "sanctions_hits": sanctions_hits,
+            "avg_response_time": avg_response_time,
+            "false_positive_rate": false_positive_rate
+        }
+        
+    except Exception as e:
+        logger.error(f"Error calculating alert metrics: {e}")
+        raise HTTPException(status_code=500, detail="Failed to calculate alert metrics")
+@app.post("/api/test/create-alert")
+async def create_test_alert(
+    alert_type: str = Form(...),
+    description: str = Form(...),
+    risk_score: float = Form(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency)
+):
+    new_alert = Alert(
+        transaction_id=str(uuid.uuid4()), # Dummy transaction ID
+        alert_type=alert_type,
+        risk_score=risk_score,
+        description=description,
+        status="OPEN",
+        priority="MEDIUM"
+    )
+    db.add(new_alert)
+    db.commit()
+    db.refresh(new_alert)
+    logger.info(f"Test alert created: {new_alert.id}")
+    return {"message": "Test alert created successfully", "alert_id": str(new_alert.id)}
 
 @app.get("/api/alerts/export")
 async def export_alerts(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
@@ -2503,7 +2741,7 @@ async def assign_alert(
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
     
-    alert.assigned_to = assign_data.user_id
+    alert.assigned_to = current_user.username # Assign to the actual username of the current user
     db.add(alert)
     db.commit()
     return {"message": f"Alert {alert_id} assigned to {assign_data.user_id}"}
@@ -2598,8 +2836,6 @@ async def get_dashboard_stats(db: Session = Depends(get_db), current_user: User 
 
 @app.get("/api/cases/metrics")
 async def get_cases_metrics(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
-    if isinstance(current_user, RedirectResponse):
-        return current_user
     """Get case management metrics"""
     metrics = await case_service.get_case_metrics(db)
     return metrics
@@ -2675,12 +2911,7 @@ async def create_case(
         logger.error(f"Error creating case: {e}", exc_info=True) # Log traceback
         raise HTTPException(status_code=500, detail="Internal Server Error during case creation")
 
-@app.get("/api/cases/{case_id}")
-async def get_case(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
-    case = db.query(Case).options(joinedload(Case.alert).joinedload(Alert.transaction), joinedload(Case.activities)).filter(Case.id == case_id).first()
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
-    return case
+
 
 @app.get("/api/cases/export")
 async def export_cases(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
@@ -2693,16 +2924,42 @@ async def export_cases(db: Session = Depends(get_db), current_user: User = Depen
 @app.get("/api/cases/distribution")
 async def get_case_distribution(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
     logger.info("Getting case distribution")
+    """Get case distribution metrics"""
     if isinstance(current_user, RedirectResponse):
         return current_user
+
     case_distribution = db.query(
         Case.status,
-        func.count(Case.id).label('count')
+        func.count(Case.id)
     ).group_by(Case.status).all()
 
+    labels = []
+    data = []
+    # Define a consistent order for labels and map statuses to display names
+    status_order = ["OPEN", "INVESTIGATING", "PENDING_REVIEW", "ESCALATED", "CLOSED"]
+    status_map = {
+        "OPEN": "Open",
+        "INVESTIGATING": "Investigating",
+        "PENDING_REVIEW": "Pending Review",
+        "ESCALATED": "Escalated",
+        "CLOSED": "Closed"
+    }
+
+    # Initialize counts for all statuses to 0
+    status_counts = {status: 0 for status in status_order}
+
+    for status, count in case_distribution:
+        if status.value in status_counts: # Use .value for Enum comparison
+            status_counts[status.value] = count
+
+    # Populate labels and data in the defined order
+    for status_key in status_order:
+        labels.append(status_map[status_key])
+        data.append(status_counts[status_key])
+
     return {
-        "labels": [item.status.value for item in case_distribution],
-        "data": [item.count for item in case_distribution]
+        "labels": labels,
+        "data": data
     }
 
 
@@ -3314,6 +3571,9 @@ async def make_customer_transfer(
     if current_customer is None:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
+    # Check if source and destination accounts are the same
+    is_same_account_transfer = (transfer_request.source_account_number == transfer_request.destination_account_number)
+
     # Validate source account belongs to the customer
     source_account = db.query(Account).filter(
         Account.account_number == transfer_request.source_account_number,
@@ -3323,26 +3583,42 @@ async def make_customer_transfer(
     if not source_account:
         raise HTTPException(status_code=400, detail="Invalid source account or account does not belong to you")
 
-    # Validate destination account belongs to the customer
-    destination_account = db.query(Account).filter(
-        Account.account_number == transfer_request.destination_account_number,
-        Account.customer_id == current_customer.customer_id
-    ).first()
+    # Validate destination account belongs to the customer (only if not same account transfer)
+    destination_account = None
+    if not is_same_account_transfer:
+        destination_account = db.query(Account).filter(
+            Account.account_number == transfer_request.destination_account_number,
+            Account.customer_id == current_customer.customer_id
+        ).first()
 
-    if not destination_account:
-        raise HTTPException(status_code=400, detail="Invalid destination account or account does not belong to you")
+        if not destination_account:
+            raise HTTPException(status_code=400, detail="Invalid destination account or account does not belong to you")
+    else:
+        # If it's a same-account transfer, the destination is implicitly the source
+        destination_account = source_account
 
     if source_account.balance < transfer_request.amount:
         raise HTTPException(status_code=400, detail="Insufficient funds")
 
-    # Perform the transfer
-    source_account.balance -= transfer_request.amount
-    destination_account.balance += transfer_request.amount
-    db.add(source_account)
-    db.add(destination_account)
-    db.commit()
-    db.refresh(source_account)
-    db.refresh(destination_account)
+    # Perform the transfer (only if not same account transfer)
+    try:
+        if not is_same_account_transfer:
+            source_account.balance -= transfer_request.amount
+            destination_account.balance += transfer_request.amount
+            db.add(source_account)
+            db.add(destination_account)
+            logger.info(f"[make_customer_transfer] Attempting to commit balance changes for {transfer_request.source_account_number} and {transfer_request.destination_account_number}")
+            db.commit()
+            db.refresh(source_account)
+            db.refresh(destination_account)
+            logger.info(f"[make_customer_transfer] Balance changes committed successfully.")
+        else:
+            logger.info(f"[make_customer_transfer] Same-account transfer detected for {transfer_request.source_account_number}. No balance changes to commit.")
+            db.commit() # Commit any pending changes, though none for balance here
+    except Exception as e:
+        db.rollback()
+        logger.error(f"[make_customer_transfer] Error committing balance changes for transfer: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to process transfer due to balance update error.")
 
     # Create a debit transaction
     debit_transaction_data = TransactionCreate(
@@ -3375,9 +3651,16 @@ async def make_customer_transfer(
         processed_by=f"customer:{current_customer.username}",
         status=TransactionStatus.PENDING
     )
-    db.add(db_debit_transaction)
-    db.commit()
-    db.refresh(db_debit_transaction)
+    try:
+        db.add(db_debit_transaction)
+        logger.info(f"[make_customer_transfer] Attempting to commit debit transaction {db_debit_transaction.id}")
+        db.commit()
+        db.refresh(db_debit_transaction)
+        logger.info(f"[make_customer_transfer] Debit transaction {db_debit_transaction.id} committed successfully.")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"[make_customer_transfer] Error committing debit transaction: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to process transfer due to debit transaction error.")
 
     background_tasks.add_task(
         process_transaction_controls,
@@ -3385,45 +3668,53 @@ async def make_customer_transfer(
         debit_transaction_data.dict()
     )
 
-    # Create a credit transaction
-    credit_transaction_data = TransactionCreate(
-        customer_id=current_customer.customer_id,
-        account_number=transfer_request.destination_account_number,
-        transaction_type="CREDIT",
-        amount=transfer_request.amount,
-        currency=transfer_request.currency,
-        channel="INTERNAL_TRANSFER",
-        counterparty_account=transfer_request.source_account_number,
-        counterparty_name=current_customer.full_name,
-        counterparty_bank="SAME",
-        reference=transfer_request.reference,
-        narrative=f"Transfer from {transfer_request.source_account_number}"
-    )
+    # Create a credit transaction (only if not same account transfer)
+    if not is_same_account_transfer:
+        credit_transaction_data = TransactionCreate(
+            customer_id=current_customer.customer_id,
+            account_number=transfer_request.destination_account_number,
+            transaction_type="CREDIT",
+            amount=transfer_request.amount,
+            currency=transfer_request.currency,
+            channel="INTERNAL_TRANSFER",
+            counterparty_account=transfer_request.source_account_number,
+            counterparty_name=current_customer.full_name,
+            counterparty_bank="SAME",
+            reference=transfer_request.reference,
+            narrative=f"Transfer from {transfer_request.source_account_number}"
+        )
 
-    db_credit_transaction = Transaction(
-        customer_id=credit_transaction_data.customer_id,
-        account_number=credit_transaction_data.account_number,
-        transaction_type=credit_transaction_data.transaction_type,
-        amount=credit_transaction_data.amount,
-        base_amount=await currency_service.convert_to_base(credit_transaction_data.amount, credit_transaction_data.currency),
-        currency=credit_transaction_data.currency,
-        channel=credit_transaction_data.channel,
-        counterparty_account=credit_transaction_data.counterparty_account,
-        counterparty_name=credit_transaction_data.counterparty_name,
-        counterparty_bank=credit_transaction_data.counterparty_bank,
-        reference=credit_transaction_data.reference,
-        narrative=credit_transaction_data.narrative,
-        processed_by=f"customer:{current_customer.username}",
-        status=TransactionStatus.COMPLETED # Credit is completed immediately
-    )
-    db.add(db_credit_transaction)
-    db.commit()
-    db.refresh(db_credit_transaction)
+        db_credit_transaction = Transaction(
+            customer_id=credit_transaction_data.customer_id,
+            account_number=credit_transaction_data.account_number,
+            transaction_type=credit_transaction_data.transaction_type,
+            amount=credit_transaction_data.amount,
+            base_amount=await currency_service.convert_to_base(credit_transaction_data.amount, credit_transaction_data.currency),
+            currency=credit_transaction_data.currency,
+            channel=credit_transaction_data.channel,
+            counterparty_account=credit_transaction_data.counterparty_account,
+            counterparty_name=credit_transaction_data.counterparty_name,
+            counterparty_bank=credit_transaction_data.counterparty_bank,
+            reference=credit_transaction_data.reference,
+            narrative=credit_transaction_data.narrative,
+            processed_by=f"customer:{current_customer.username}",
+            status=TransactionStatus.COMPLETED # Credit is completed immediately
+        )
+        try:
+            db.add(db_credit_transaction)
+            logger.info(f"[make_customer_transfer] Attempting to commit credit transaction {db_credit_transaction.id}")
+            db.commit()
+            db.refresh(db_credit_transaction)
+            logger.info(f"[make_customer_transfer] Credit transaction {db_credit_transaction.id} committed successfully.")
+        except Exception as e:
+            db.rollback()
+            logger.error(f"[make_customer_transfer] Error committing credit transaction: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to process transfer due to credit transaction error.")
 
-    background_tasks.add_task(
-        process_transaction_controls,
-        db_credit_transaction.id,
-        credit_transaction_data.dict()
-    )
+        background_tasks.add_task(
+            process_transaction_controls,
+            db_credit_transaction.id,
+            credit_transaction_data.dict()
+        )
 
     return {"message": "Transfer processed successfully", "transaction_id": db_debit_transaction.id}

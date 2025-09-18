@@ -282,6 +282,20 @@ class CaseManagementService:
             
             # Total cases
             total_cases = db.query(Case).filter(Case.created_at >= start_date).count()
+
+            # If no cases, return zero metrics immediately
+            if total_cases == 0:
+                return {
+                    'total_cases': 0,
+                    'open_cases': 0,
+                    'overdue_cases': 0,
+                    'avg_resolution_days': 0.0,
+                    'status_distribution': {},
+                    'sla_compliance_percentage': 100.0,
+                    'sla_breached_count': 0,
+                    'decision_distribution': {},
+                    'active_cases': 0
+                }
             
             # Cases by status
             status_counts = {}
@@ -323,12 +337,14 @@ class CaseManagementService:
             
             return {
                 'total_cases': total_cases,
-                'status_distribution': status_counts,
+                'open_cases': status_counts.get(CaseStatus.OPEN.value, 0),
+                'overdue_cases': sla_breached, # Using sla_breached_count as overdue cases
                 'avg_resolution_days': avg_resolution_hours / 24, # Convert hours to days
+                'status_distribution': status_counts,
                 'sla_compliance_percentage': sla_compliance,
                 'sla_breached_count': sla_breached,
                 'decision_distribution': decisions,
-                'active_cases': total_cases - status_counts.get('CLOSED', 0)
+                'active_cases': total_cases - status_counts.get(CaseStatus.CLOSED.value, 0)
             }
             
         except Exception as e:

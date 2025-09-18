@@ -51,10 +51,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const formData = new FormData(transferForm);
             const data = Object.fromEntries(formData.entries());
 
-            if (data.source_account_number === data.destination_account_number) {
-                alert('Source and destination accounts cannot be the same.');
-                return;
-            }
+
 
             data.amount = parseFloat(data.amount);
 

@@ -1,8 +1,9 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 import asyncio
+
 
 from models import Transaction, TransactionStatus, Alert, Case # Import Case model as well
 from aml_controls import AMLControlEngine
@@ -22,7 +23,7 @@ ml_engine = MLAnomlyEngine()
 risk_engine = RiskScoringEngine()
 sanctions_engine = SanctionsScreeningEngine()
 
-async def process_transaction_controls(transaction_id: str, transaction_data: dict, db: Session):
+async def process_transaction_controls(transaction_id: str, transaction_data: dict, db: Session, manager):
     """Background task to process AML controls"""
     logger.info(f"[process_transaction_controls] Starting for transaction_id: {transaction_id}")
     
@@ -65,39 +66,86 @@ async def process_transaction_controls(transaction_id: str, transaction_data: di
         
         for control_name, result in control_results.items():
             if result['triggered']:
+                alert_type = f"AML_{control_name}"
+                existing_alert = db.query(Alert).filter(
+                    and_(Alert.transaction_id == transaction_id, Alert.alert_type == alert_type)
+                ).first()
+
+                if existing_alert:
+                    # Update existing alert
+                    existing_alert.risk_score = result['risk_score']
+                    existing_alert.description = result['description']
+                    existing_alert.metadata = result['metadata']
+                    existing_alert.status = "OPEN" # Or keep current status if not "CLOSED"
+                    db.add(existing_alert) # Add to session for update
+                    alerts_created.append(existing_alert)
+                else:
+                    # Create new alert
+                    alert = Alert(
+                        transaction_id=transaction_id,
+                        alert_type=alert_type,
+                        risk_score=result['risk_score'],
+                        description=result['description'],
+                        metadata=result['metadata'],
+                        status="OPEN",
+                        sla_deadline=datetime.utcnow() + timedelta(hours=24) # Set SLA deadline
+                    )
+                    db.add(alert)
+                    alerts_created.append(alert)
+        
+        if anomaly_score > 0.7:
+            alert_type = "ML_ANOMALY"
+            existing_alert = db.query(Alert).filter(
+                and_(Alert.transaction_id == transaction_id, Alert.alert_type == alert_type)
+            ).first()
+
+            if existing_alert:
+                # Update existing alert
+                existing_alert.risk_score = anomaly_score
+                existing_alert.description = f"ML anomaly detected with score {anomaly_score:.2f}"
+                existing_alert.status = "OPEN"
+                db.add(existing_alert)
+                alerts_created.append(existing_alert)
+            else:
+                # Create new alert
                 alert = Alert(
                     transaction_id=transaction_id,
-                    alert_type=f"AML_{control_name}",
-                    risk_score=result['risk_score'],
-                    description=result['description'],
-                    metadata=result['metadata'],
-                    status="OPEN"
+                    alert_type=alert_type,
+                    risk_score=anomaly_score,
+                    description=f"ML anomaly detected with score {anomaly_score:.2f}",
+                    status="OPEN",
+                    sla_deadline=datetime.utcnow() + timedelta(hours=24) # Set SLA deadline
                 )
                 db.add(alert)
                 alerts_created.append(alert)
         
-        if anomaly_score > 0.7:
-            alert = Alert(
-                transaction_id=transaction_id,
-                alert_type="ML_ANOMALY",
-                risk_score=anomaly_score,
-                description=f"ML anomaly detected with score {anomaly_score:.2f}",
-                status="OPEN"
-            )
-            db.add(alert)
-            alerts_created.append(alert)
-        
         if sanctions_result['matched']:
-            alert = Alert(
-                transaction_id=transaction_id,
-                alert_type="SANCTIONS_HIT",
-                risk_score=1.0,
-                description=f"Sanctions match: {sanctions_result['details']}",
-                status="OPEN",
-                priority="HIGH"
-            )
-            db.add(alert)
-            alerts_created.append(alert)
+            alert_type = "SANCTIONS_HIT"
+            existing_alert = db.query(Alert).filter(
+                and_(Alert.transaction_id == transaction_id, Alert.alert_type == alert_type)
+            ).first()
+
+            if existing_alert:
+                # Update existing alert
+                existing_alert.risk_score = 1.0
+                existing_alert.description = f"Sanctions match: {sanctions_result['details']}"
+                existing_alert.status = "OPEN"
+                existing_alert.priority = "HIGH"
+                db.add(existing_alert)
+                alerts_created.append(existing_alert)
+            else:
+                # Create new alert
+                alert = Alert(
+                    transaction_id=transaction_id,
+                    alert_type="SANCTIONS_HIT",
+                    risk_score=1.0,
+                    description=f"Sanctions match: {sanctions_result['details']}",
+                    status="OPEN",
+                    priority="HIGH",
+                    sla_deadline=datetime.utcnow() + timedelta(hours=24) # Set SLA deadline
+                )
+                db.add(alert)
+                alerts_created.append(alert)
         
         if alerts_created:
             logger.info(f"[process_transaction_controls] Alerts created for {transaction_id}. Setting status to FLAGGED.")
@@ -111,27 +159,27 @@ async def process_transaction_controls(transaction_id: str, transaction_data: di
         logger.info(f"[process_transaction_controls] Final status updated to {transaction.status} for {transaction_id}")
 
         # Send real-time update for transaction status (assuming manager is available)
-        # await manager.broadcast({
-        #     "type": "transaction_status_update",
-        #     "data": {
-        #         "id": str(transaction.id),
-        #         "status": transaction.status.value if hasattr(transaction.status, 'value') else str(transaction.status)
-        #     }
-        # })
+        await manager.broadcast({
+            "type": "transaction_status_update",
+            "data": {
+                "id": str(transaction.id),
+                "status": transaction.status.value if hasattr(transaction.status, 'value') else str(transaction.status)
+            }
+        })
         
         # Send real-time notifications
         for alert in alerts_created:
-            # await manager.broadcast({
-            #     "type": "alert_generated",
-            #     "data": {
-            #         "id": alert.id,
-            #         "alert_type": alert.alert_type,
-            #         "risk_score": alert.risk_score,
-            #         "description": alert.description,
-            #         "customer_id": alert.transaction.customer_id if alert.transaction else None,
-            #         "timestamp": alert.created_at.isoformat()
-            #     }
-            # })
+            await manager.broadcast({
+                "type": "alert_generated",
+                "data": {
+                    "id": alert.id,
+                    "alert_type": alert.alert_type,
+                    "risk_score": alert.risk_score,
+                    "description": alert.description,
+                    "customer_id": alert.transaction.customer_id if alert.transaction else None,
+                    "timestamp": alert.created_at.isoformat()
+                }
+            })
             
             # Send email notification for high-risk alerts
             if alert.risk_score > 0.8:
@@ -147,10 +195,10 @@ async def process_transaction_controls(transaction_id: str, transaction_data: di
         logger.error(f"[process_transaction_controls] Status updated to FAILED for {transaction_id} due to error.")
         
         # Send real-time update for failed transaction status
-        # await manager.broadcast({
-        #     "type": "transaction_status_update",
-        #     "data": {
-        #         "id": str(transaction.id),
-        #         "status": transaction.status.value if hasattr(transaction.status, 'value') else str(transaction.status)
-        #     }
-        # })
+        await manager.broadcast({
+            "type": "transaction_status_update",
+            "data": {
+                "id": str(transaction.id),
+                "status": transaction.status.value if hasattr(transaction.status, 'value') else str(transaction.status)
+            }
+        })

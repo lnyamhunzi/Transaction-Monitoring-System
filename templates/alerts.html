@@ -35,11 +35,10 @@
                         <div class="form-group">
                             <label class="form-label">Status</label>
                             <select class="form-control" id="statusFilter">
-                                <option value="">All Statuses</option>
-                                <option value="OPEN">Open</option>
-                                <option value="INVESTIGATING">Investigating</option>
-                                <option value="CLOSED">Closed</option>
-                                <option value="FALSE_POSITIVE">False Positive</option>
+                                <option value="" {% if not current_status %}selected{% endif %}>All Statuses</option>
+                                {% for status_option in AlertStatus %}
+                                <option value="{{ status_option.name }}" {% if current_status and current_status.name == status_option.name %}selected{% endif %}>{{ status_option.name.replace('_', ' ').title() }}</option>
+                                {% endfor %}
                             </select>
                         </div>
                     </div>
@@ -47,15 +46,15 @@
                         <div class="form-group">
                             <label class="form-label">Alert Type</label>
                             <select class="form-control" id="typeFilter">
-                                <option value="">All Types</option>
-                                <option value="AML_STAFF_POSTING">Staff Posting</option>
-                                <option value="AML_UNUSUAL_INCOMING">Unusual Incoming</option>
-                                <option value="AML_SMALL_PROFILE_INCOMING">Small Profile Incoming</option>
-                                <option value="SWIFT_UNUSUAL">SWIFT Unusual</option>
-                                <option value="SWIFT_SMALL_PROFILE">SWIFT Small Profile</option>
-                                <option value="CROSS_CURRENCY">Cross Currency</option>
-                                <option value="SANCTIONS_HIT">Sanctions Hit</option>
-                                <option value="ML_ANOMALY">ML Anomaly</option>
+                                <option value="" {% if not current_alert_type %}selected{% endif %}>All Types</option>
+                                <option value="AML_STAFF_POSTING" {% if current_alert_type == "AML_STAFF_POSTING" %}selected{% endif %}>Staff Posting</option>
+                                <option value="AML_UNUSUAL_INCOMING" {% if current_alert_type == "AML_UNUSUAL_INCOMING" %}selected{% endif %}>Unusual Incoming</option>
+                                <option value="AML_SMALL_PROFILE_INCOMING" {% if current_alert_type == "AML_SMALL_PROFILE_INCOMING" %}selected{% endif %}>Small Profile Incoming</option>
+                                <option value="SWIFT_UNUSUAL" {% if current_alert_type == "SWIFT_UNUSUAL" %}selected{% endif %}>SWIFT Unusual</option>
+                                <option value="SWIFT_SMALL_PROFILE" {% if current_alert_type == "SWIFT_SMALL_PROFILE" %}selected{% endif %}>SWIFT Small Profile</option>
+                                <option value="CROSS_CURRENCY" {% if current_alert_type == "CROSS_CURRENCY" %}selected{% endif %}>Cross Currency</option>
+                                <option value="SANCTIONS_HIT" {% if current_alert_type == "SANCTIONS_HIT" %}selected{% endif %}>Sanctions Hit</option>
+                                <option value="ML_ANOMALY" {% if current_alert_type == "ML_ANOMALY" %}selected{% endif %}>ML Anomaly</option>
                             </select>
                         </div>
                     </div>
@@ -63,11 +62,11 @@
                         <div class="form-group">
                             <label class="form-label">Risk Level</label>
                             <select class="form-control" id="riskFilter">
-                                <option value="">All Risk Levels</option>
-                                <option value="critical">Critical (90-100%)</option>
-                                <option value="high">High (70-90%)</option>
-                                <option value="medium">Medium (40-70%)</option>
-                                <option value="low">Low (0-40%)</option>
+                                <option value="" {% if not current_risk_score_min and not current_risk_score_max %}selected{% endif %}>All Risk Levels</option>
+                                <option value="critical" {% if current_risk_score_min == 0.9 and current_risk_score_max == 1.0 %}selected{% endif %}>Critical (90-100%)</option>
+                                <option value="high" {% if current_risk_score_min == 0.7 and current_risk_score_max == 0.9 %}selected{% endif %}>High (70-90%)</option>
+                                <option value="medium" {% if current_risk_score_min == 0.4 and current_risk_score_max == 0.7 %}selected{% endif %}>Medium (40-70%)</option>
+                                <option value="low" {% if current_risk_score_min == 0.0 and current_risk_score_max == 0.4 %}selected{% endif %}>Low (0-40%)</option>
                             </select>
                         </div>
                     </div>
@@ -75,11 +74,11 @@
                         <div class="form-group">
                             <label class="form-label">Priority</label>
                             <select class="form-control" id="priorityFilter">
-                                <option value="">All Priorities</option>
-                                <option value="CRITICAL">Critical</option>
-                                <option value="HIGH">High</option>
-                                <option value="MEDIUM">Medium</option>
-                                <option value="LOW">Low</option>
+                                <option value="" {% if not current_priority %}selected{% endif %}>All Priorities</option>
+                                <option value="CRITICAL" {% if current_priority == "CRITICAL" %}selected{% endif %}>Critical</option>
+                                <option value="HIGH" {% if current_priority == "HIGH" %}selected{% endif %}>High</option>
+                                <option value="MEDIUM" {% if current_priority == "MEDIUM" %}selected{% endif %}>Medium</option>
+                                <option value="LOW" {% if current_priority == "LOW" %}selected{% endif %}>Low</option>
                             </select>
                         </div>
                     </div>
@@ -220,7 +219,74 @@
                             </tr>
                         </thead>
                         <tbody>
-                            <!-- Dynamic content populated by JavaScript -->
+                            {% for alert in alerts %}
+                            <tr>
+                                <td width="30">
+                                    <input type="checkbox" class="alert-checkbox" data-alert-id="{{ alert.id }}">
+                                </td>
+                                <td>
+                                    <div class="d-flex align-items-center">
+                                        <div class="risk-score risk-{{ alert.risk_score | get_risk_level }}">{{ (alert.risk_score * 100) | round(0) }}</div>
+                                        <div class="ms-2">
+                                            <div class="fw-semibold">{{ alert.id }}</div>
+                                            <small class="text-muted">{{ alert.description[:50] }}...</small>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div>
+                                        <span class="badge bg-secondary mb-1">{{ alert.alert_type }}</span><br>
+                                        <span class="risk-indicator risk-{{ alert.risk_score | get_risk_level }}">
+                                            <i class="fas fa-shield-alt me-1"></i>
+                                            {{ alert.risk_score | get_risk_level | upper }}
+                                        </span>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div>
+                                        <div class="fw-semibold">{{ alert.customer_id }}</div>
+                                        <small class="text-muted">Customer Profile</small>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div>
+                                        <div class="fw-semibold">{{ alert.transaction.amount | format_currency }} {{ alert.transaction.currency }}</div>
+                                        <small class="text-muted">Transaction Details</small>
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="status-badge status-{{ alert.status.lower() }}">{{ alert.status.replace('_', ' ') | title }}</span>
+                                </td>
+                                <td>
+                                    {{ alert.assigned_to or '<span class="text-muted">Unassigned</span>' }}
+                                </td>
+                                <td>
+                                    {{ alert.created_at | format_date }}
+                                </td>
+                                <td>
+                                    <div class="sla-indicator sla-{{ alert.sla_deadline | calculate_sla_status('class') }}">
+                                        <i class="fas fa-clock me-1"></i>{{ alert.sla_deadline | calculate_sla_status('text') }}
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="btn-group btn-group-sm">
+                                        <button class="btn btn-outline-primary view-alert-btn" data-alert-id="{{ alert.id }}" title="View Details">
+                                            <i class="fas fa-eye"></i> View
+                                        </button>
+                                        <button class="btn btn-outline-success assign-alert-btn" data-alert-id="{{ alert.id }}" title="Assign to Me">
+                                            <i class="fas fa-user-check"></i>
+                                        </button>
+                                        <button class="btn btn-outline-info create-case-btn" data-alert-id="{{ alert.id }}" title="Create Case">
+                                            <i class="fas fa-folder-plus"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="10" class="text-center">No alerts found matching your criteria.</td>
+                            </tr>
+                            {% endfor %}
                         </tbody>
                     </table>
                 </div>
@@ -392,6 +458,9 @@
 
 {% block extra_scripts %}
 <script>
+    var initialAlertsData = {{ alerts | tojson }};
+</script>
+<script>
 /**
  * Alerts Management JavaScript
  */
@@ -415,8 +484,8 @@ class AlertsManagement {
     async init() {
         this.setupWebSocket();
         this.setupDataTable();
+        this.updateAlertsTable(initialAlertsData); // Use initial data from Jinja2
         this.setupEventListeners();
-        await this.loadAlerts();
         await this.loadAlertMetrics();
         this.setupRealTimeStream();
     }
@@ -468,7 +537,7 @@ class AlertsManagement {
         });
         
         // Button handlers
-        document.getElementById('refreshAlerts').addEventListener('click', () => this.loadAlerts());
+        document.getElementById('refreshAlerts').addEventListener('click', () => this.applyFilters());
         document.getElementById('exportAlerts').addEventListener('click', () => this.exportAlerts());
         document.getElementById('bulkActionsBtn').addEventListener('click', () => this.showBulkActionsModal());
         
@@ -514,13 +583,15 @@ class AlertsManagement {
         try {
             this.showLoading(true);
             
-            const url = `/api/staff/monitoring/alerts/recent?limit=1000&${queryString}`;
+            // Call the correct API endpoint for alerts with full filtering support
+            const url = `/api/alerts/?limit=5000&${queryString}`;
             const response = await fetch(url, { headers: this.getAuthHeaders() });
             if (response.status === 401) { window.location.href = '/admin/login'; return; }
             if (!response.ok) throw new Error('Failed to load alerts');
             
             const alerts = await response.json();
-            this.updateAlertsTable(alerts);
+            // Ensure alerts is an array, even if the API returns null or non-array
+            this.updateAlertsTable(Array.isArray(alerts) ? alerts : []);
             
         } catch (error) {
             console.error('Error loading alerts:', error);
@@ -530,72 +601,81 @@ class AlertsManagement {
         }
     }
     
-    updateAlertsTable(alerts) {
-        this.alertsTable.clear();
-        
-        alerts.forEach(alert => {
-            const slaStatus = this.calculateSLAStatus(alert.sla_deadline);
-            const riskLevel = AMLBase.getRiskLevel(alert.risk_score);
-            
-            this.alertsTable.row.add([
-                `<input type="checkbox" class="alert-checkbox" data-alert-id="${alert.id}">`,
-                
-                `<div class="d-flex align-items-center">
-                    <div class="risk-score risk-${riskLevel}">
-                        ${(alert.risk_score * 100).toFixed(0)}
-                    </div>
-                    <div class="ms-2">
-                        <div class="fw-semibold">${alert.id}</div>
-                        <small class="text-muted">${alert.description.substring(0, 50)}...</small>
-                    </div>
-                </div>`,
-                
-                `<div>
-                    <span class="badge bg-secondary mb-1">${alert.alert_type}</span><br>
-                    <span class="risk-indicator risk-${riskLevel}">
-                        <i class="fas fa-shield-alt me-1"></i>
-                        ${riskLevel.toUpperCase()}
-                    </span>
-                </div>`,
-                
-                `<div>
-                    <div class="fw-semibold">${alert.customer_id}</div>
-                    <small class="text-muted">Customer Profile</small>
-                </div>`,
-                
-                `<div>
-                    <div class="fw-semibold">${AMLBase.formatCurrency(alert.transaction?.amount || 0)} ${alert.transaction?.currency || 'USD'}</div>
-                    <small class="text-muted">${alert.transaction?.channel || 'N/A'}</small>
-                </div>`,
-                
-                `<span class="status-badge status-${alert.status.toLowerCase()}">${alert.status.replace('_', ' ')}</span>`,
-                
-                alert.assigned_to || '<span class="text-muted">Unassigned</span>',
-                
-                AMLBase.formatDate(alert.created_at),
-                
-                `<div class="sla-indicator sla-${slaStatus.class}">
-                    <i class="fas fa-clock me-1"></i>${slaStatus.text}
-                </div>`,
-                
-                `<div class="btn-group btn-group-sm">
-                    <button class="btn btn-outline-primary view-alert-btn" data-alert-id="${alert.id}" title="View Details">
-                        <i class="fas fa-eye"></i>
-                    </button>
-                    <button class="btn btn-outline-success assign-alert-btn" data-alert-id="${alert.id}" title="Assign to Me">
-                        <i class="fas fa-user-check"></i>
-                    </button>
-                    <button class="btn btn-outline-info create-case-btn" data-alert-id="${alert.id}" title="Create Case">
-                        <i class="fas fa-folder-plus"></i>
-                    </button>
-                </div>`
-            ]);
-        });
-        
-        this.alertsTable.draw();
-    }
-    
-    calculateSLAStatus(slaDeadline) {
+                updateAlertsTable(alerts) {
+                    this.alertsTable.clear();
+                    
+                    console.log("updateAlertsTable received:", alerts); // Keep logging for now
+                    
+                    if (Array.isArray(alerts)) {
+                        if (alerts.length === 0) {
+                            console.log("updateAlertsTable: Received an empty array. No alerts to display.");
+                        }
+                        alerts.forEach(alert => {
+                            console.log("Processing alert:", alert); // Keep logging for now
+                            
+                            const slaStatus = this.calculateSLAStatus(alert.sla_deadline || alert.created_at); // Use created_at as fallback
+                            const riskLevel = AMLBase.getRiskLevel(alert.risk_score);
+                            
+                            this.alertsTable.row.add([
+                                `<input type="checkbox" class="alert-checkbox" data-alert-id="${alert.id}">`,
+                                
+                                `<div class="d-flex align-items-center">
+                                    <div class="risk-score risk-${riskLevel}">
+                                        ${(alert.risk_score * 100).toFixed(0)}
+                                    </div>
+                                    <div class="ms-2">
+                                        <div class="fw-semibold">${alert.id}</div>
+                                        <small class="text-muted">${alert.description ? alert.description.substring(0, 50) : ''}...</small>
+                                    </div>
+                                </div>`,
+                                
+                                `<div>
+                                    <span class="badge bg-secondary mb-1">${alert.alert_type}</span><br>
+                                    <span class="risk-indicator risk-${riskLevel}">
+                                        <i class="fas fa-shield-alt me-1"></i>
+                                        ${riskLevel.toUpperCase()}
+                                    </span>
+                                </div>`,
+                                
+                                `<div>
+                                    <div class="fw-semibold">${alert.transaction?.customer_id || 'N/A'}</div>
+                                    <small class="text-muted">Customer Profile</small>
+                                </div>`,
+                                
+                                `<div>
+                                    <div class="fw-semibold">${AMLBase.formatCurrency(alert.transaction?.amount || 0)} ${alert.transaction?.currency || 'USD'}</div>
+                                    <small class="text-muted">Transaction Details</small>
+                                </div>`,
+                                
+                                `<span class="status-badge status-${alert.status.toLowerCase()}">${alert.status.replace('_', ' ')}</span>`,
+                                
+                                alert.assigned_to || '<span class="text-muted">Unassigned</span>',
+                                
+                                AMLBase.formatDate(alert.created_at),
+                                
+                                `<div class="sla-indicator sla-${slaStatus.class}">
+                                    <i class="fas fa-clock me-1"></i>${slaStatus.text}
+                                </div>`,
+                                
+                                `<div class="btn-group btn-group-sm">
+                                    <button class="btn btn-outline-primary view-alert-btn" data-alert-id="${alert.id}" title="View Details">
+                                        <i class="fas fa-eye"></i> View
+                                    </button>
+                                    <button class="btn btn-outline-success assign-alert-btn" data-alert-id="${alert.id}" title="Assign to Me">
+                                        <i class="fas fa-user-check"></i>
+                                    </button>
+                                    <button class="btn btn-outline-info create-case-btn" data-alert-id="${alert.id}" title="Create Case">
+                                        <i class="fas fa-folder-plus"></i>
+                                    </button>
+                                </div>`
+                            ]);
+                        });
+                    } else {
+                        console.error("updateAlertsTable: Expected alerts to be an array, but received:", alerts);
+                    }
+                    
+                    this.alertsTable.draw();
+                }    calculateSLAStatus(slaDeadline) {
         if (!slaDeadline) return { class: 'unknown', text: 'No SLA' };
         
         const now = new Date();
@@ -611,9 +691,9 @@ class AlertsManagement {
         }
     }
     
-    async loadAlertMetrics() {
+    async loadAlertMetrics(queryString = '') {
         try {
-            const response = await fetch('/api/alerts/metrics', { headers: this.getAuthHeaders() });
+            const response = await fetch(`/api/alerts/metrics?${queryString}`, { headers: this.getAuthHeaders() });
             if (response.status === 401) { window.location.href = '/admin/login'; return; }
             if (!response.ok) throw new Error('Failed to load metrics');
             
@@ -642,16 +722,9 @@ class AlertsManagement {
         this.addToAlertStream(alert);
         
         // Update metrics
-        this.incrementMetric('totalAlerts');
-        if (alert.status === 'OPEN') {
-            this.incrementMetric('openAlerts');
-        }
-        if (alert.risk_score >= 0.7) {
-            this.incrementMetric('highRiskAlerts');
-        }
-        if (alert.alert_type === 'SANCTIONS_HIT') {
-            this.incrementMetric('sanctionsHits');
-        }
+        // Note: Metrics will be reloaded by loadAlertMetrics() after table refresh,
+        // so direct incrementing here might lead to temporary inconsistencies.
+        // It's better to rely on a full reload of metrics.
         
         // Play notification sound for high-risk alerts
         if (alert.risk_score >= 0.8) {
@@ -664,6 +737,9 @@ class AlertsManagement {
             `New ${riskLevel.toUpperCase()} risk alert: ${alert.alert_type}`,
             riskLevel === 'critical' || riskLevel === 'high' ? 'warning' : 'info'
         );
+
+        // Refresh the main alerts table and metrics to reflect the new/updated alert
+        this.applyFilters(); // Reload the page with current filters
     }
     
     addToAlertStream(alert) {
@@ -761,7 +837,7 @@ class AlertsManagement {
                         <div class="card-body">
                             <table class="table table-sm">
                                 <tr><td>Transaction ID</td><td>${alert.transaction_id}</td></tr>
-                                <tr><td>Customer ID</td><td>${alert.customer_id}</td></tr>
+                                <tr><td>Customer ID</td><td>${alert.customer_id || 'N/A'}</td></tr>
                                 <tr><td>Amount</td><td>${AMLBase.formatCurrency(alert.transaction?.amount || 0)} ${alert.transaction?.currency || 'USD'}</td></tr>
                                 <tr><td>Channel</td><td>${alert.transaction?.channel || 'N/A'}</td></tr>
                                 <tr><td>Type</td><td>${alert.transaction?.transaction_type || 'N/A'}</td></tr>
@@ -777,14 +853,25 @@ class AlertsManagement {
                     <h6 class="card-title mb-0">Alert Description & Analysis</h6>
                 </div>
                 <div class="card-body">
-                    <p><strong>Description:</strong> ${alert.description}</p>
-                    ${alert.metadata ? `<p><strong>Additional Details:</strong> ${JSON.stringify(alert.metadata, null, 2)}</p>` : ''}
-                    ${alert.resolution_notes ? `<div class="mt-3"><strong>Resolution Notes:</strong><br>${alert.resolution_notes}</div>` : ''}
+                    <p><strong>Description:</strong> ${this.escapeHtml(alert.description)}</p>
+                    ${alert.metadata ? `<p><strong>Additional Details:</strong> <pre>${this.escapeHtml(JSON.stringify(alert.metadata, null, 2))}</pre></p>` : ''}
+                    ${alert.resolution_notes ? `<div class="mt-3"><strong>Resolution Notes:</strong><br>${this.escapeHtml(alert.resolution_notes)}</div>` : ''}
                 </div>
             </div>
         `;
         
         this.currentAlertId = alert.id;
+    }
+    
+    escapeHtml(unsafe) {
+        if (unsafe === null || unsafe === undefined) return '';
+        return unsafe
+            .toString()
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
     }
     
     toggleAlertSelection(alertId, selected) {
@@ -864,7 +951,12 @@ class AlertsManagement {
         const params = new URLSearchParams();
         if (status) params.append('status', status);
         if (alert_type) params.append('alert_type', alert_type);
-        if (risk_level) params.append('risk_level', risk_level);
+        // For risk_level, we need to convert it to min/max risk scores
+        if (risk_level === 'critical') { params.append('riskScoreMin', '0.9'); params.append('riskScoreMax', '1.0'); }
+        else if (risk_level === 'high') { params.append('riskScoreMin', '0.7'); params.append('riskScoreMax', '0.9'); }
+        else if (risk_level === 'medium') { params.append('riskScoreMin', '0.4'); params.append('riskScoreMax', '0.7'); }
+        else if (risk_level === 'low') { params.append('riskScoreMin', '0.0'); params.append('riskScoreMax', '0.4'); }
+
         if (priority) params.append('priority', priority);
         if (assigned_to) params.append('assigned_to', assigned_to);
 
@@ -877,7 +969,8 @@ class AlertsManagement {
             }
         }
 
-        this.loadAlerts(params.toString());
+        const queryString = params.toString();
+        window.location.href = `/alerts?${queryString}`;
     }
     
     incrementMetric(metricId) {
@@ -885,7 +978,7 @@ class AlertsManagement {
         if (element) {
             const currentValue = parseInt(element.textContent) || 0;
             element.textContent = currentValue + 1;
-        }
+        } 
     }
     
     playNotificationSound() {
@@ -1030,6 +1123,13 @@ document.addEventListener('DOMContentLoaded', () => {
     border: 1px solid #dee2e6;
     border-radius: 0.375rem;
     padding: 1rem;
+}
+
+/* Alert Details Modal Content Scrollable */
+#alertDetailsContent {
+    max-height: 60vh; /* Adjust as needed, e.g., 60% of viewport height */
+    overflow-y: auto;
+    padding-right: 15px; /* To prevent content from being hidden by scrollbar */
 }
 
 .alert-stream-item {

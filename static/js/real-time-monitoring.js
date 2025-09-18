@@ -832,34 +832,35 @@ class RealTimeMonitor {
      * Update alert display
      */
     updateAlertDisplay(alert) {
-        const alertListContainer = document.getElementById('alertList'); // Assuming an alert list container
-        if (!alertListContainer) return;
+        const alertListTableBody = document.querySelector('#alertList tbody');
+        if (!alertListTableBody) return;
 
-        const alertElement = document.createElement('div');
-        alertElement.className = `alert-item risk-${this.getRiskLevel(alert.risk_score)}`;
-        alertElement.innerHTML = `
-            <div class="alert-header">
-                <strong>${alert.alert_type}</strong> - Risk: ${(alert.risk_score * 100).toFixed(0)}%
-                <span class="alert-time">${new Date(alert.timestamp).toLocaleTimeString()}</span>
-            </div>
-            <div class="alert-body">
-                <p>${alert.description}</p>
-                <p>Customer: ${this.maskCustomerId(alert.customer_id)}</p>
-            </div>
-            <div class="alert-actions">
+        // Remove the 'No alerts in queue' row if it exists
+        const noAlertsRow = alertListTableBody.querySelector('.no-alerts-row');
+        if (noAlertsRow) {
+            noAlertsRow.remove();
+        }
+
+        const alertRow = document.createElement('tr');
+        alertRow.className = `alert-item risk-${this.getRiskLevel(alert.risk_score)}`;
+        alertRow.innerHTML = `
+            <td>${alert.alert_type}</td>
+            <td><span class="badge bg-${this.getRiskLevel(alert.risk_score)}">${(alert.risk_score * 100).toFixed(0)}%</span></td>
+            <td>${this.maskCustomerId(alert.customer_id)}</td>
+            <td>${alert.description}</td>
+            <td>${new Date(alert.timestamp).toLocaleTimeString()}</td>
+            <td>
                 <button class="btn btn-sm btn-outline-secondary acknowledge-alert-btn" data-alert-id="${alert.id}">Acknowledge</button>
                 <button class="btn btn-sm btn-primary investigate-alert-btn" data-alert-id="${alert.id}">Investigate</button>
-            </div>
+            </td>
         `;
 
-        alertListContainer.insertBefore(alertElement, alertListContainer.firstChild);
+        alertListTableBody.insertBefore(alertRow, alertListTableBody.firstChild);
 
         // Keep only a certain number of alerts in the display
-        const items = alertListContainer.children;
+        const items = alertListTableBody.children;
         if (items.length > 10) { // Example: keep last 10 alerts
-            for (let i = 10; i < items.length; i++) {
-                alertListContainer.removeChild(items[i]);
-            }
+            alertListTableBody.removeChild(items[items.length - 1]);
         }
     }
 
@@ -1032,10 +1033,6 @@ class RealTimeMonitor {
      * Update filtered display (for both transactions and alerts)
      */
     updateFilteredDisplay(filteredTransactions, filteredAlerts) {
-        // This function would typically re-render the transaction stream and alert list
-        // For simplicity, we'll just re-render the transaction stream here.
-        // A more robust solution would involve separate rendering functions for each.
-
         const streamContainer = document.getElementById('transactionStream');
         if (streamContainer) {
             streamContainer.innerHTML = ''; // Clear current display
@@ -1043,14 +1040,22 @@ class RealTimeMonitor {
                 streamContainer.innerHTML = '<p class="text-muted text-center mt-3">No transactions match the current filters.</p>';
             } else {
                 filteredTransactions.forEach(transaction => {
-                    this.updateTransactionStreamDisplay(transaction); // Re-use existing display logic
+                    this.updateTransactionStreamDisplay(transaction);
                 });
             }
         }
 
-        // You would need a similar logic for alerts if they are displayed in a separate filterable list
-        // e.g., const alertListContainer = document.getElementById('alertList');
-        // if (alertListContainer) { ... }
+        const alertListTableBody = document.querySelector('#alertList tbody');
+        if (alertListTableBody) {
+            alertListTableBody.innerHTML = ''; // Clear current display
+            if (filteredAlerts.length === 0) {
+                alertListTableBody.innerHTML = '<tr class="no-alerts-row"><td colspan="6" class="text-center text-muted mt-3">No alerts match the current filters.</td></tr>';
+            } else {
+                filteredAlerts.forEach(alert => {
+                    this.updateAlertDisplay(alert);
+                });
+            }
+        }
     }
 
     /**
@@ -1070,6 +1075,8 @@ class RealTimeMonitor {
             if (alertsResponse.ok) {
                 const alerts = await alertsResponse.json();
                 this.monitoringData.alerts = alerts;
+                // Populate the alert list with initial alerts
+                alerts.forEach(alert => this.updateAlertDisplay(alert));
             }
             
             // Initial chart updates

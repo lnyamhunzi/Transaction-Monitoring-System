@@ -412,9 +412,9 @@ class CaseManagement {
             return;
         }
         await this.loadCases();
-        await this.loadCaseMetrics();
-        this.initCaseDistributionChart();
-        await this.loadUsersForAssignment(); // Add this line
+        await this.loadCaseMetrics(headers);
+        this.initCaseDistributionChart(headers);
+        await this.loadUsersForAssignment(headers); // Add this line
     }
     
     setupDataTable() {
@@ -465,21 +465,25 @@ class CaseManagement {
         document.addEventListener('click', (e) => {
             if (e.target.closest('.view-case-btn')) {
                 const caseId = e.target.closest('.view-case-btn').dataset.caseId;
+                console.log('View Case button clicked for caseId:', caseId);
                 this.viewCaseDetails(caseId);
             }
             
             if (e.target.closest('.update-case-btn')) {
                 const caseId = e.target.closest('.update-case-btn').dataset.caseId;
+                console.log('Update Case button clicked for caseId:', caseId);
                 this.showUpdateCaseModal(caseId);
             }
             
             if (e.target.closest('.close-case-btn')) {
                 const caseId = e.target.closest('.close-case-btn').dataset.caseId;
+                console.log('Close Case button clicked for caseId:', caseId);
                 this.showCloseCaseModal(caseId);
             }
 
             if (e.target.closest('.create-case-btn')) {
                 const alertId = e.target.closest('.create-case-btn').dataset.alertId;
+                console.log('Create Case button clicked for alertId:', alertId);
                 this.showCreateCaseModal(false, alertId);
             }
         });
@@ -558,32 +562,45 @@ class CaseManagement {
         }
     }
     
-    async loadCaseMetrics() {
+    async loadCaseMetrics(headers) {
         try {
-            const response = await fetch('/api/cases/metrics', { headers: this.getAuthHeaders() });
+            const url = '/api/cases/metrics';
+            console.log('Fetching case metrics from:', url);
+            const response = await fetch(url, { headers: headers });
+            console.log('Response status for case metrics:', response.status);
             if (response.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!response.ok) throw new Error('Failed to load metrics');
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Failed to load metrics: ${response.status} - ${errorText}`);
+            }
             
             const metrics = await response.json();
+            console.log('Received case metrics:', metrics);
             
             document.getElementById('totalCases').textContent = metrics.total_cases;
             document.getElementById('openCases').textContent = metrics.open_cases;
             document.getElementById('overdueCases').textContent = metrics.overdue_cases;
             document.getElementById('avgResolutionTime').textContent = metrics.avg_resolution_days.toFixed(1);
             
-        } catch (error) {
-            console.error('Error loading case metrics:', error);
-        }
-    }
+                    } catch (error) {
+                        console.error('Error loading case metrics:', error);
+                        if (typeof AMLBase !== 'undefined' && AMLBase.showToast) {
+                            AMLBase.showToast('Failed to load case metrics', 'danger');
+                        }
+                    }    }
     
-    async initCaseDistributionChart() {
+    async initCaseDistributionChart(headers) {
         const ctx = document.getElementById('caseDistributionChart');
         if (!ctx) return;
 
         try {
-            const response = await fetch('/api/cases/distribution', { headers: this.getAuthHeaders() });
+            const response = await fetch('/api/cases/distribution', { headers: headers });
             if (response.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!response.ok) throw new Error('Failed to load case distribution data');
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('API Error:', errorText); // Added explicit error logging
+                throw new Error(`Failed to load case distribution data: ${response.status} - ${errorText}`);
+            }
             const data = await response.json();
 
             new Chart(ctx, {
@@ -613,12 +630,15 @@ class CaseManagement {
             });
         } catch (error) {
             console.error('Error loading case distribution chart:', error);
+            if (typeof AMLBase !== 'undefined' && AMLBase.showToast) {
+                AMLBase.showToast('Failed to load case distribution chart', 'danger');
+            }
         }
     }
     
-    async loadUsersForAssignment() {
+    async loadUsersForAssignment(headers) {
         try {
-            const response = await fetch('/api/admin/users', { headers: this.getAuthHeaders() });
+            const response = await fetch('/api/admin/users', { headers: headers });
             if (response.status === 401) { window.location.href = '/admin/login'; return; }
             if (!response.ok) throw new Error('Failed to load users');
             

@@ -161,6 +161,13 @@ class AMLDashboard {
             const amlSummary = await amlSummaryResponse.json();
             this.updateAmlControlSummary(amlSummary);
 
+            // Load charts data
+            const chartsDataResponse = await fetch('/api/reports/charts-data', { headers });
+            if (chartsDataResponse.status === 401) { window.location.href = '/admin/login'; return; }
+            if (!chartsDataResponse.ok) throw new Error('Failed to load charts data');
+            const chartsData = await chartsDataResponse.json();
+            this.updateTransactionVolumeChartData(chartsData.volume_trends);
+            
             // Load recent alerts
             this.loadAlerts();
 
@@ -504,6 +511,21 @@ class AMLDashboard {
             chart.update('active');
         }
     }
+
+    /**
+     * Update transaction volume chart data
+     */
+    updateTransactionVolumeChartData(volumeTrends) {
+        if (!this.charts.transactionVolume) return;
+
+        const chart = this.charts.transactionVolume;
+        if (volumeTrends) {
+            chart.data.labels = volumeTrends.labels;
+            chart.data.datasets[0].data = volumeTrends.total_volume;
+            // If you have high_risk_volume, you might add another dataset or modify the existing one
+            chart.update('active');
+        }
+    }
     
     /**
      * Handle new alert from WebSocket
@@ -512,17 +534,11 @@ class AMLDashboard {
         console.log('New alert received:', alert);
         
         // Show notification
-        this.showNotification(`New ${alert.type} alert`, 'warning');
+        this.showNotification(`New ${alert.alert_type} alert`, 'warning'); // Changed alert.type to alert.alert_type
         
-        // Update alerts table
-        this.addAlertToTable(alert);
-        
-        // Update metrics
-        this.incrementMetricCard('open-alerts');
-        
-        if (alert.risk_score >= 0.8) {
-            this.incrementMetricCard('high-risk-alerts');
-        }
+        // Refresh the recent alerts table and all dashboard metrics/charts
+        this.loadAlerts();
+        this.loadInitialData(); // This will refresh all metrics including alert counts
         
         // Play notification sound for high-risk alerts
         if (alert.risk_score >= 0.8) {
@@ -534,18 +550,14 @@ class AMLDashboard {
      * Handle new transaction from WebSocket
      */
     handleNewTransaction(transaction) {
-        // Update transaction count
-        this.incrementMetricCard('today-transactions');
+        console.log('New transaction received:', transaction);
+        // Trigger a full dashboard refresh to update all metrics and charts
+        this.loadInitialData();
         
-        // Update transaction volume chart if visible
-        if (this.charts.transactionVolume) {
-            this.updateTransactionVolumeChart(transaction);
-        }
-
-        // Add new transaction to table
-        if (this.transactionsTable) {
-            this.transactionsTable.row.add(transaction).draw(false);
-        }
+        // Add new transaction to table (if applicable, though loadInitialData will refresh this too)
+        // if (this.transactionsTable) {
+        //     this.transactionsTable.row.add(transaction).draw(false);
+        // }
     }
     
     /**
@@ -668,7 +680,7 @@ class AMLDashboard {
             `,
             `<span class="badge bg-secondary">${alert.alert_type}</span>`,
             alert.customer_id,
-            `${this.formatCurrency(alert.transaction?.amount || 0)} ${alert.transaction?.currency || 'USD'}`,
+            `${this.formatCurrency(Number(alert.transaction?.amount) || 0)} ${alert.transaction?.currency || 'USD'}`,
             `<span class="status-badge status-${alert.status.toLowerCase()}">${alert.status}</span>`,
             `
             <div class="btn-group btn-group-sm">
