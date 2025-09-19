@@ -2328,6 +2328,53 @@ class AlertUpdate(BaseModel):
 
 
 
+@app.get("/api/cases/metrics")
+async def get_cases_metrics(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    """Get case management metrics"""
+    metrics = await case_service.get_case_metrics(db)
+    return metrics
+
+@app.get("/api/cases/distribution")
+async def get_case_distribution(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    logger.info("Getting case distribution")
+    """Get case distribution metrics"""
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+
+    case_distribution = db.query(
+        Case.status,
+        func.count(Case.id)
+    ).group_by(Case.status).all()
+
+    labels = []
+    data = []
+    # Define a consistent order for labels and map statuses to display names
+    status_order = ["OPEN", "INVESTIGATING", "PENDING_REVIEW", "ESCALATED", "CLOSED"]
+    status_map = {
+        "OPEN": "Open",
+        "INVESTIGATING": "Investigating",
+        "PENDING_REVIEW": "Pending Review",
+        "ESCALATED": "Escalated",
+        "CLOSED": "Closed"
+    }
+
+    # Initialize counts for all statuses to 0
+    status_counts = {status: 0 for status in status_order}
+
+    for status, count in case_distribution:
+        if status.value in status_counts: # Use .value for Enum comparison
+            status_counts[status.value] = count
+
+    # Populate labels and data in the defined order
+    for status_key in status_order:
+        labels.append(status_map[status_key])
+        data.append(status_counts[status_key])
+
+    return {
+        "labels": labels,
+        "data": data
+    }
+
 @app.get("/api/cases/{case_id}")
 async def get_case(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
     if isinstance(current_user, RedirectResponse):
@@ -2834,11 +2881,7 @@ async def get_dashboard_stats(db: Session = Depends(get_db), current_user: User 
 
 
 
-@app.get("/api/cases/metrics")
-async def get_cases_metrics(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
-    """Get case management metrics"""
-    metrics = await case_service.get_case_metrics(db)
-    return metrics
+
 
 @app.get("/api/cases/", response_model=List[CaseResponse])
 async def get_cases(
@@ -2921,46 +2964,7 @@ async def export_cases(db: Session = Depends(get_db), current_user: User = Depen
         output += f"{case.case_number},{case.title},{case.status},{case.priority},{case.assigned_to},{case.created_at}\n"
     return Response(content=output, media_type="text/csv")
 
-@app.get("/api/cases/distribution")
-async def get_case_distribution(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
-    logger.info("Getting case distribution")
-    """Get case distribution metrics"""
-    if isinstance(current_user, RedirectResponse):
-        return current_user
 
-    case_distribution = db.query(
-        Case.status,
-        func.count(Case.id)
-    ).group_by(Case.status).all()
-
-    labels = []
-    data = []
-    # Define a consistent order for labels and map statuses to display names
-    status_order = ["OPEN", "INVESTIGATING", "PENDING_REVIEW", "ESCALATED", "CLOSED"]
-    status_map = {
-        "OPEN": "Open",
-        "INVESTIGATING": "Investigating",
-        "PENDING_REVIEW": "Pending Review",
-        "ESCALATED": "Escalated",
-        "CLOSED": "Closed"
-    }
-
-    # Initialize counts for all statuses to 0
-    status_counts = {status: 0 for status in status_order}
-
-    for status, count in case_distribution:
-        if status.value in status_counts: # Use .value for Enum comparison
-            status_counts[status.value] = count
-
-    # Populate labels and data in the defined order
-    for status_key in status_order:
-        labels.append(status_map[status_key])
-        data.append(status_counts[status_key])
-
-    return {
-        "labels": labels,
-        "data": data
-    }
 
 
 

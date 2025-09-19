@@ -133,10 +133,13 @@ class CaseManagementService:
             # Apply updates
             for key, value in updates.items():
                 if hasattr(case, key) and value is not None:
-                    setattr(case, key, value)
+                    if key == 'status':
+                        setattr(case, key, CaseStatus[value]) # Convert string to Enum
+                    else:
+                        setattr(case, key, value)
             
             # Log status change
-            if 'status' in updates and updates['status'] != old_status:
+            if 'status' in updates and CaseStatus[updates['status']] != old_status:
                 await self.validate_status_transition(old_status, updates['status'])
                 await self.log_case_activity(
                     case_id,
@@ -165,7 +168,7 @@ class CaseManagementService:
                 )
             
             # Log notes update
-            if 'investigation_notes' in updates:
+            if updates.get('investigation_notes'):
                 await self.log_case_activity(
                     case_id,
                     "NOTES_UPDATED",

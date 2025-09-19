@@ -229,7 +229,7 @@
                 <h5 class="modal-title">Case Details</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <div class="modal-body">
+            <div class="modal-body" style="max-height: calc(100vh - 200px); overflow-y: auto;">
                 <div id="caseDetailsContent">
                     <!-- Dynamic content -->
                 </div>
@@ -247,9 +247,7 @@
 </div>
 
 <!-- Create Case Modal -->
-<div class="modal fade" id="createCaseModal" tabindex="-1">
-    <div class="modal-dialog modal-xl">
-        <div class="modal-content" style="max-height: calc(100vh - 50px); overflow-y: auto;">
+<div class="modal-content" style="max-height: calc(100vh - 150px); overflow-y: auto;">
             <div class="modal-header">
                 <h5 class="modal-title">Create New Case</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -337,7 +335,7 @@
 <!-- Update Case Status Modal -->
 <div class="modal fade" id="updateCaseModal" tabindex="-1">
     <div class="modal-dialog">
-        <div class="modal-content">
+        <div class="modal-content" style="max-height: calc(100vh - 150px); overflow-y: auto;">
             <div class="modal-header">
                 <h5 class="modal-title">Update Case Status</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -728,6 +726,46 @@ class CaseManagement {
         }
     }
     
+    showUpdateCaseModal(caseId) {
+        const modal = new bootstrap.Modal(document.getElementById('updateCaseModal'));
+        const form = document.getElementById('updateCaseForm');
+        form.reset(); // Clear previous data
+
+        // Fetch case details to populate the form
+        this.viewCaseDetails(caseId).then(caseData => {
+            if (caseData) {
+                // Populate form fields
+                form.querySelector('[name="status"]').value = caseData.status;
+                form.querySelector('[name="assigned_to"]').value = caseData.assigned_to || '';
+                // Assuming there's a notes field in the update modal
+                // form.querySelector('[name="notes"]').value = caseData.investigation_notes || ''; 
+                
+                this.currentCaseId = caseId; // Set current case ID for update
+                modal.show();
+            } else {
+                // If caseData is null, it means viewCaseDetails failed to find the case
+                AMLBase.showToast('Failed to load case details for update. Case not found or an error occurred.', 'danger');
+            }
+        }).catch(error => {
+            console.error('Error fetching case details for update modal:', error);
+            AMLBase.showToast('Error loading case details for update.', 'danger');
+        });
+    }
+
+    showCloseCaseModal(caseId) {
+        const modal = new bootstrap.Modal(document.getElementById('updateCaseModal'));
+        const form = document.getElementById('updateCaseForm');
+        form.reset();
+
+        // Pre-fill status to CLOSED
+        form.querySelector('[name="status"]').value = 'CLOSED';
+        // Optionally pre-fill notes or other fields for closing
+        form.querySelector('[name="notes"]').value = 'Case closed after investigation.';
+
+        this.currentCaseId = caseId;
+        modal.show();
+    }
+    
     async viewCaseDetails(caseId) {
         try {
             const response = await fetch(`/api/cases/${caseId}`, { headers: this.getAuthHeaders() });
@@ -739,10 +777,12 @@ class CaseManagement {
             
             const modal = new bootstrap.Modal(document.getElementById('caseDetailsModal'));
             modal.show();
+            return caseData; // Return the fetched data
             
         } catch (error) {
             console.error('Error loading case details:', error);
             AMLBase.showToast('Failed to load case details', 'danger');
+            return null; // Return null on error
         }
     }
     
@@ -757,8 +797,8 @@ class CaseManagement {
                         <tr><td>Status</td><td><span class="status-badge status-${caseData.status.toLowerCase()}">${caseData.status}</span></td></tr>
                         <tr><td>Priority</td><td><span class="status-badge status-${caseData.priority.toLowerCase()}">${caseData.priority}</span></td></tr>
                         <tr><td>Assigned To</td><td>${caseData.assigned_to || 'Unassigned'}</td></tr>
-                        <tr><td>Created</td><td>${AMLBase.formatDate(caseData.created_at)}</td></tr>
-                        <tr><td>Target Completion</td><td>${caseData.target_completion_date ? AMLBase.formatDate(caseData.target_completion_date) : 'Not set'}</td></tr>
+                        <tr><td>Created</td><td>${typeof AMLBase !== 'undefined' && AMLBase.formatDate ? AMLBase.formatDate(caseData.created_at) : caseData.created_at}</td></tr>
+                        <tr><td>Target Completion</td><td>${caseData.target_completion_date ? (typeof AMLBase !== 'undefined' && AMLBase.formatDate ? AMLBase.formatDate(caseData.target_completion_date) : caseData.target_completion_date) : 'Not set'}</td></tr>
                     </table>
                 </div>
                 <div class="col-md-6">
@@ -809,7 +849,7 @@ class CaseManagement {
                 <div class="timeline-content">
                     <div class="timeline-header">
                         <strong>${activity.activity_type.replace('_', ' ')}</strong>
-                        <span class="text-muted ms-2">${AMLBase.formatDate(activity.performed_at)}</span>
+                        <span class="text-muted ms-2">${typeof AMLBase !== 'undefined' && AMLBase.formatDate ? AMLBase.formatDate(activity.performed_at) : activity.performed_at}</span>
                     </div>
                     <div class="timeline-body">
                         <p>${activity.description}</p>
@@ -956,6 +996,11 @@ document.addEventListener('DOMContentLoaded', () => {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 0.5rem;
+}
+.modal-body p,
+.modal-body div.bg-light {
+    word-wrap: break-word;
+    overflow-wrap: break-word;
 }
 </style>
 {% endblock %}
