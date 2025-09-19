@@ -180,7 +180,7 @@ class RealTimeMonitor {
         
         // Check if transaction meets filter criteria
         if (this.matchesFilter(transaction)) {
-            this.addTransactionToTable(transaction);
+            // Removed this.addTransactionToTable(transaction);
         }
     }
     
@@ -592,7 +592,10 @@ class RealTimeMonitor {
      */
     updateConnectionStatus(connected) {
         const statusElement = document.getElementById('connectionStatus');
-        if (!statusElement) return;
+        if (!statusElement) {
+            console.warn('Connection status element (id="connectionStatus") not found. UI will not be updated.');
+            return;
+        }
         
         if (connected) {
             statusElement.className = 'connection-status connected';
@@ -869,7 +872,10 @@ class RealTimeMonitor {
      */
     updateMLMetrics(prediction) {
         const mlMetricsContainer = document.getElementById('mlMetrics'); // Assuming a container for ML metrics
-        if (!mlMetricsContainer) return;
+        if (!mlMetricsContainer) {
+            console.warn('ML metrics element (id="mlMetrics") not found. UI will not be updated.');
+            return;
+        }
 
         // Example: Update a simple text display
         mlMetricsContainer.innerHTML = `
@@ -883,7 +889,10 @@ class RealTimeMonitor {
      */
     updateSystemMetricsDisplay(metrics) {
         const systemMetricsContainer = document.getElementById('systemMetrics'); // Assuming a container for system metrics
-        if (!systemMetricsContainer) return;
+        if (!systemMetricsContainer) {
+            console.warn('System metrics element (id="systemMetrics") not found. UI will not be updated.');
+            return;
+        }
 
         systemMetricsContainer.innerHTML = `
             <p>CPU Usage: ${metrics.cpu_usage}%</p>
@@ -1089,6 +1098,9 @@ class RealTimeMonitor {
         }
     }
 }
+
+// Explicitly register the date-fns adapter with Chart.js
+
 
 // Initialize real-time monitor when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {

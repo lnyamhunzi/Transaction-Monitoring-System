@@ -149,22 +149,36 @@ class AMLDashboard {
             // Load dashboard statistics
             const statsResponse = await fetch('/api/dashboard/stats', { headers });
             if (statsResponse.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!statsResponse.ok) throw new Error('Failed to load stats');
+            if (!statsResponse.ok) {
+                const errorText = await statsResponse.text();
+                throw new Error(`Failed to load dashboard statistics: ${statsResponse.status} - ${errorText}`);
+            }
             const stats = await statsResponse.json();
+            if (!stats) {
+                console.error('Received null or empty stats from /api/dashboard/stats');
+                this.showError('Failed to load dashboard statistics: No data received.');
+                return;
+            }
             
             this.updateDashboardStats(stats);
             
             // Load AML Control Summary
             const amlSummaryResponse = await fetch('/api/dashboard/aml-control-summary', { headers });
             if (amlSummaryResponse.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!amlSummaryResponse.ok) throw new Error('Failed to load AML control summary');
+            if (!amlSummaryResponse.ok) {
+                const errorText = await amlSummaryResponse.text();
+                throw new Error(`Failed to load AML control summary: ${amlSummaryResponse.status} - ${errorText}`);
+            }
             const amlSummary = await amlSummaryResponse.json();
             this.updateAmlControlSummary(amlSummary);
 
             // Load charts data
             const chartsDataResponse = await fetch('/api/reports/charts-data', { headers });
             if (chartsDataResponse.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!chartsDataResponse.ok) throw new Error('Failed to load charts data');
+            if (!chartsDataResponse.ok) {
+                const errorText = await chartsDataResponse.text();
+                throw new Error(`Failed to load charts data: ${chartsDataResponse.status} - ${errorText}`);
+            }
             const chartsData = await chartsDataResponse.json();
             this.updateTransactionVolumeChartData(chartsData.volume_trends);
             
@@ -187,7 +201,7 @@ class AMLDashboard {
             const headers = await this.getAuthHeaders();
             if (!headers) return;
 
-            const url = `/api/alerts/?${queryString}`;
+            const url = `/api/monitoring/alerts/recent?${queryString}`;
             const response = await fetch(url, { headers });
             if (response.status === 401) { window.location.href = '/admin/login'; return; }
             if (!response.ok) throw new Error('Failed to load alerts');
@@ -236,17 +250,30 @@ class AMLDashboard {
      */
     updateDashboardStats(stats) {
         // Update metric cards
-        this.updateMetricCard('today-transactions', stats.today_transactions);
-        this.updateMetricCard('open-alerts', stats.open_alerts);
-        this.updateMetricCard('high-risk-alerts', stats.high_risk_alerts);
-        
-        // Update risk distribution chart
-        if (this.charts.riskDistribution) {
-            this.updateRiskDistributionChart(stats.risk_distribution);
+        if (stats) {
+            this.updateMetricCard('today-transactions', stats.today_transactions || 5, stats.transactions_change);
+            this.updateMetricCard('open-alerts', stats.open_alerts || 0, stats.alerts_change);
+            this.updateMetricCard('high-risk-alerts', stats.high_risk_alerts || 0); // No specific change for high-risk alerts in backend
+            this.updateMetricCard('cases-opened-today', stats.cases_opened_today || 0, stats.cases_change); // New metric card
+
+            // Update risk distribution chart
+            if (this.charts.riskDistribution && stats.risk_distribution) {
+                this.updateRiskDistributionChart(stats.risk_distribution);
+            } else if (this.charts.riskDistribution) {
+                console.warn('Risk distribution data missing from stats, cannot update chart.');
+                this.updateRiskDistributionChart([]); // Clear chart or show empty state
+            }
+            
+            // Update alert trends
+            if (stats.alert_trends) {
+                this.updateAlertTrends(stats.alert_trends);
+            } else {
+                console.warn('Alert trends data missing from stats, cannot update chart.');
+                this.updateAlertTrends({ labels: [], high_risk: [], medium_risk: [] }); // Clear chart or show empty state
+            }
+        } else {
+            console.error('updateDashboardStats received null or undefined stats object.');
         }
-        
-        // Update alert trends
-        this.updateAlertTrends(stats.alert_trends);
     }
     
     /**
@@ -264,9 +291,12 @@ class AMLDashboard {
             this.animateNumber(valueElement, parseInt(valueElement.textContent) || 0, value);
         }
         
-        if (changeElement && change !== null) {
+        if (changeElement && change !== null && !isNaN(change)) {
             changeElement.textContent = `${change > 0 ? '+' : ''}${change}%`;
             changeElement.className = `metric-change ${change > 0 ? 'change-positive' : 'change-negative'}`;
+        } else if (changeElement) {
+            changeElement.textContent = 'N/A';
+            changeElement.className = 'metric-change'; // Reset class if no valid change
         }
     }
     
@@ -561,6 +591,14 @@ class AMLDashboard {
     }
     
     /**
+     * Handle case update from WebSocket
+     */
+    handleCaseUpdate(caseData) {
+        // This function is currently empty.
+        // It should handle updates to cases, e.g., refresh case-related KPIs.
+    }
+    
+    /**
      * Setup event listeners
      */
     async setupEventListeners() {
@@ -599,14 +637,16 @@ class AMLDashboard {
 
         // Modal triggers
         document.addEventListener('click', (e) => {
-            if (e.target.classList.contains('view-alert-btn')) {
-                const alertId = e.target.dataset.alertId;
+            const viewAlertBtn = e.target.closest('.view-alert-btn');
+            if (viewAlertBtn) {
+                const alertId = viewAlertBtn.dataset.alertId;
                 this.showAlertDetails(alertId);
             }
             
-            if (e.target.classList.contains('create-case-btn')) {
-                const alertId = e.target.dataset.alertId;
-                this.showCreateCaseModal(alertId);
+            const createCaseBtn = e.target.closest('.create-case-btn');
+            if (createCaseBtn) {
+                const alertId = createCaseBtn.dataset.alertId;
+                this.triggerCreateCaseModal(alertId);
             }
         });
         
@@ -680,7 +720,7 @@ class AMLDashboard {
             `,
             `<span class="badge bg-secondary">${alert.alert_type}</span>`,
             alert.customer_id,
-            `${this.formatCurrency(Number(alert.transaction?.amount) || 0)} ${alert.transaction?.currency || 'USD'}`,
+            `${this.formatCurrency(Number(alert.transaction?.amount) || 0, alert.transaction?.currency || 'USD')}`,
             `<span class="status-badge status-${alert.status.toLowerCase()}">${alert.status}</span>`,
             `
             <div class="btn-group btn-group-sm">
@@ -730,7 +770,9 @@ class AMLDashboard {
                 {
                     "data": "id",
                     "render": function ( data, type, row ) {
-                        return `<a href="/monitoring/transactions/${data}" class="btn btn-sm btn-outline-primary">View</a>`;
+                        const url = `/monitoring/transactions/${data}`;
+                        console.log(`Generated transaction view URL: ${url}`);
+                        return `<a href="${url}" class="btn btn-sm btn-outline-primary">View</a>`;
                     }
                 }
             ],
@@ -874,6 +916,7 @@ class AMLDashboard {
      * Show alert details modal
      */
     async showAlertDetails(alertId) {
+        console.log(`Attempting to show alert details for alert ID: ${alertId}`);
         try {
             const response = await fetch(`/api/alerts/${alertId}`, { headers: await this.getAuthHeaders() });
             if (!response.ok) throw new Error('Failed to load alert details');
@@ -892,6 +935,18 @@ class AMLDashboard {
         } catch (error) {
             console.error('Error showing alert details:', error);
             this.showError('Failed to load alert details');
+        }
+    }
+    
+    /**
+     * Trigger Create Case modal (delegates to CaseManagement)
+     */
+    triggerCreateCaseModal(alertId) {
+        console.log(`Triggering Create Case modal for alert ID: ${alertId}`);
+        if (window.caseManagement && typeof window.caseManagement.showCreateCaseModal === 'function') {
+            window.caseManagement.showCreateCaseModal(false, alertId);
+        } else {
+            this.showError('Case management module not loaded or function not found.');
         }
     }
     

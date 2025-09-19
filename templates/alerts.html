@@ -643,7 +643,7 @@ class AlertsManagement {
                                 </div>`,
                                 
                                 `<div>
-                                    <div class="fw-semibold">${AMLBase.formatCurrency(alert.transaction?.amount || 0)} ${alert.transaction?.currency || 'USD'}</div>
+                                    <div class="fw-semibold">${AMLBase.formatCurrency(alert.transaction?.amount || 0, alert.transaction?.currency || 'USD')}</div>
                                     <small class="text-muted">Transaction Details</small>
                                 </div>`,
                                 
@@ -760,7 +760,7 @@ class AlertsManagement {
                 <div class="customer-info">
                     <div class="customer-id">${alert.customer_id}</div>
                     <div class="transaction-amount">
-                        ${AMLBase.formatCurrency(alert.transaction?.amount || 0)} ${alert.transaction?.currency || 'USD'}
+                        ${AMLBase.formatCurrency(alert.transaction?.amount || 0, alert.transaction?.currency || 'USD')}
                     </div>
                 </div>
             </div>
@@ -838,7 +838,7 @@ class AlertsManagement {
                             <table class="table table-sm">
                                 <tr><td>Transaction ID</td><td>${alert.transaction_id}</td></tr>
                                 <tr><td>Customer ID</td><td>${alert.customer_id || 'N/A'}</td></tr>
-                                <tr><td>Amount</td><td>${AMLBase.formatCurrency(alert.transaction?.amount || 0)} ${alert.transaction?.currency || 'USD'}</td></tr>
+                                <tr><td>Amount</td><td>${AMLBase.formatCurrency(alert.transaction?.amount || 0, alert.transaction?.currency || 'USD')}</td></tr>
                                 <tr><td>Channel</td><td>${alert.transaction?.channel || 'N/A'}</td></tr>
                                 <tr><td>Type</td><td>${alert.transaction?.transaction_type || 'N/A'}</td></tr>
                                 <tr><td>Counterparty</td><td>${alert.transaction?.counterparty_name || 'N/A'}</td></tr>

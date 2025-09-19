@@ -67,7 +67,9 @@
         <div class="card h-100">
             <div class="card-body">
                 <h5 class="card-title">Real-time Transaction Flow</h5>
-                <canvas id="realTimeFlowChart"></canvas>
+                <div class="chart-container">
+                    <canvas id="realTimeFlowChart"></canvas>
+                </div>
             </div>
         </div>
     </div>
@@ -75,7 +77,9 @@
         <div class="card h-100">
             <div class="card-body">
                 <h5 class="card-title">Risk Distribution</h5>
-                <canvas id="realTimeRiskChart"></canvas>
+                <div class="chart-container">
+                    <canvas id="realTimeRiskChart"></canvas>
+                </div>
             </div>
         </div>
     </div>
@@ -130,7 +134,9 @@
         <div class="card h-100">
             <div class="card-body">
                 <h5 class="card-title">Transaction Volume Over Time</h5>
-                <canvas id="transactionVolumeChart"></canvas>
+                <div class="chart-container">
+                    <canvas id="transactionVolumeChart"></canvas>
+                </div>
             </div>
         </div>
     </div>
@@ -138,7 +144,9 @@
         <div class="card h-100">
             <div class="card-body">
                 <h5 class="card-title">Alert Trends</h5>
-                <canvas id="alertTrendsChart"></canvas>
+                <div class="chart-container">
+                    <canvas id="alertTrendsChart"></canvas>
+                </div>
             </div>
         </div>
     </div>
@@ -150,5 +158,6 @@
 {% endblock %}
 
 {% block extra_scripts %}
+
 <script src="/static/js/real-time-monitoring.js"></script>
 {% endblock %}

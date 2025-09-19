@@ -224,7 +224,7 @@
 <!-- Case Details Modal -->
 <div class="modal fade" id="caseDetailsModal" tabindex="-1">
     <div class="modal-dialog modal-xl">
-        <div class="modal-content">
+        <div class="modal-content" style="max-height: calc(100vh - 100px); overflow-y: auto;">
             <div class="modal-header">
                 <h5 class="modal-title">Case Details</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -247,7 +247,9 @@
 </div>
 
 <!-- Create Case Modal -->
-<div class="modal-content" style="max-height: calc(100vh - 150px); overflow-y: auto;">
+<div class="modal fade" id="createCaseModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content" style="max-height: calc(100vh - 150px); overflow-y: auto;">
             <div class="modal-header">
                 <h5 class="modal-title">Create New Case</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -331,7 +333,6 @@
         </div>
     </div>
 </div>
-
 <!-- Update Case Status Modal -->
 <div class="modal fade" id="updateCaseModal" tabindex="-1">
     <div class="modal-dialog">
@@ -372,559 +373,78 @@
                     <button type="submit" class="btn btn-primary">Update Case</button>
                 </div>
             </form>
+        <!-- Escalate Case Modal -->
+<div class="modal fade" id="escalateCaseModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content" style="max-height: calc(100vh - 150px); overflow-y: auto;">
+            <div class="modal-header">
+                <h5 class="modal-title">Escalate Case</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="escalateCaseForm">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Escalation Reason</label>
+                        <textarea class="form-control" name="escalation_reason" rows="3" required></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Escalate To</label>
+                        <select class="form-control" name="escalated_to" required>
+                            <option value="">Select User</option>
+                            <!-- Dynamic options for users will be populated by JS -->
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-warning">Escalate Case</button>
+                </div>
+            </form>
         </div>
     </div>
 </div>
+
+<!-- Close Case Modal -->
+<div class="modal fade" id="closeCaseModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content" style="max-height: calc(100vh - 150px); overflow-y: auto;">
+            <div class="modal-header">
+                <h5 class="modal-title">Close Case</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="closeCaseForm">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Decision</label>
+                        <select class="form-control" name="decision" required>
+                            <option value="">Select Decision</option>
+                            <option value="CLOSED">Closed (No SAR)</option>
+                            <option value="SAR_FILED">SAR Filed</option>
+                            <option value="ACCOUNT_CLOSED">Account Closed</option>
+                            <option value="FALSE_POSITIVE">False Positive</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Rationale</label>
+                        <textarea class="form-control" name="rationale" rows="4" required
+                                  placeholder="Provide detailed rationale for closing the case..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success">Confirm Close</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="/static/js/case-management.js"></script>
 <script>
-
-/**
- * Case Management JavaScript
- */
-class CaseManagement {
-    constructor() {
-        this.casesTable = null;
-        this.currentCaseId = null;
-        this.init();
-    }
-
-    getAuthHeaders() {
-        const token = localStorage.getItem('admin_token');
-        if (!token) {
-            window.location.href = '/admin/login';
-            return null;
-        }
-        return {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        };
-    }
-    
-    async init() {
-        this.setupDataTable();
-        this.setupEventListeners();
-        const headers = this.getAuthHeaders();
-        if (!headers) {
-            return;
-        }
-        await this.loadCases();
-        await this.loadCaseMetrics(headers);
-        this.initCaseDistributionChart(headers);
-        await this.loadUsersForAssignment(headers); // Add this line
-    }
-    
-    setupDataTable() {
-        this.casesTable = $('#casesTable').DataTable({
-            pageLength: 25,
-            responsive: true,
-            order: [[0, 'desc']],
-            columnDefs: [
-                {
-                    targets: [7], // Actions column
-                    orderable: false,
-                    searchable: false
-                }
-            ]
-        });
-    }
-    
-    setupEventListeners() {
-        // Filter change handlers
-        document.getElementById('caseStatusFilter').addEventListener('change', () => this.applyFilters());
-        document.getElementById('casePriorityFilter').addEventListener('change', () => this.applyFilters());
-        document.getElementById('assigneeFilter').addEventListener('change', () => this.applyFilters());
-        document.getElementById('slaFilter').addEventListener('change', () => this.applyFilters());
-        
-        // Button handlers
-        document.getElementById('refreshCases').addEventListener('click', () => this.loadCases());
-        document.getElementById('exportCases').addEventListener('click', () => this.exportCases());
-        document.getElementById('createCaseFromAlert').addEventListener('click', () => this.showCreateCaseModal(false));
-        document.getElementById('createManualCase').addEventListener('click', () => this.showCreateCaseModal(true));
-        
-        // Form handlers
-        document.getElementById('createCaseForm').addEventListener('submit', (e) => this.handleCreateCase(e));
-        document.getElementById('updateCaseForm').addEventListener('submit', (e) => this.handleUpdateCase(e));
-        
-        // Case type radio buttons
-        document.querySelectorAll('input[name="case_type"]').forEach(radio => {
-            radio.addEventListener('change', (e) => {
-                const isManual = e.target.value === 'manual';
-                document.getElementById('alertIdRow').style.display = isManual ? 'none' : 'flex';
-                document.getElementById('manualCaseFields').style.display = isManual ? 'block' : 'none';
-                document.querySelector('#createCaseForm [name="alert_id"]').required = !isManual;
-                document.querySelector('#createCaseForm [name="title"]').required = isManual;
-                document.querySelector('#createCaseForm [name="description"]').required = isManual;
-            });
-        });
-
-        // Dynamic event handlers
-        document.addEventListener('click', (e) => {
-            if (e.target.closest('.view-case-btn')) {
-                const caseId = e.target.closest('.view-case-btn').dataset.caseId;
-                console.log('View Case button clicked for caseId:', caseId);
-                this.viewCaseDetails(caseId);
-            }
-            
-            if (e.target.closest('.update-case-btn')) {
-                const caseId = e.target.closest('.update-case-btn').dataset.caseId;
-                console.log('Update Case button clicked for caseId:', caseId);
-                this.showUpdateCaseModal(caseId);
-            }
-            
-            if (e.target.closest('.close-case-btn')) {
-                const caseId = e.target.closest('.close-case-btn').dataset.caseId;
-                console.log('Close Case button clicked for caseId:', caseId);
-                this.showCloseCaseModal(caseId);
-            }
-
-            if (e.target.closest('.create-case-btn')) {
-                const alertId = e.target.closest('.create-case-btn').dataset.alertId;
-                console.log('Create Case button clicked for alertId:', alertId);
-                this.showCreateCaseModal(false, alertId);
-            }
-        });
-    }
-    
-    async loadCases(queryString = '') {
-        try {
-            const url = `/api/cases/?limit=1000&${queryString}`;
-            const response = await fetch(url, { headers: this.getAuthHeaders() });
-            if (response.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!response.ok) throw new Error('Failed to load cases');
-            
-            const cases = await response.json();
-            this.updateCasesTable(cases);
-            
-        } catch (error) {
-            console.error('Error loading cases:', error);
-            AMLBase.showToast('Failed to load cases', 'danger');
-        }
-    }
-    
-    updateCasesTable(cases) {
-        this.casesTable.clear();
-        
-        cases.forEach(caseData => {
-            const slaStatus = this.calculateSLAStatus(caseData.target_completion_date);
-            
-            this.casesTable.row.add([
-                `<div class="d-flex align-items-center">
-                    <div class="me-3">
-                        <div class="fw-semibold">${caseData.case_number}</div>
-                        <small class="text-muted">${AMLBase.formatDate(caseData.created_at)}</small>
-                    </div>
-                </div>`,
-                `<span class="badge bg-warning">${caseData.alert?.alert_type || 'N/A'}</span>`,
-                caseData.alert?.customer_id || 'N/A',
-                `<span class="status-badge status-${caseData.priority.toLowerCase()}">${caseData.priority}</span>`,
-                `<span class="status-badge status-${caseData.status.toLowerCase().replace('_', '-')}">${caseData.status.replace('_', ' ')}</span>`,
-                caseData.assigned_to || 'Unassigned',
-                `<div class="sla-indicator sla-${slaStatus.class}">
-                    <i class="fas fa-clock me-1"></i>${slaStatus.text}
-                </div>`,
-                `<div class="btn-group btn-group-sm">
-                    <button class="btn btn-outline-primary view-case-btn" data-case-id="${caseData.id}">
-                        <i class="fas fa-eye"></i>
-                    </button>
-                    <button class="btn btn-outline-secondary update-case-btn" data-case-id="${caseData.id}">
-                        <i class="fas fa-edit"></i>
-                    </button>
-                    <button class="btn btn-outline-success close-case-btn" data-case-id="${caseData.id}">
-                        <i class="fas fa-check"></i>
-                    </button>
-                    <button class="btn btn-outline-info create-case-btn" data-alert-id="${caseData.alert?.id || ''}">
-                        <i class="fas fa-plus"></i>
-                    </button>
-                </div>`
-            ]);
-        });
-        
-        this.casesTable.draw();
-    }
-    
-    calculateSLAStatus(targetDate) {
-        if (!targetDate) return { class: 'unknown', text: 'No SLA' };
-        
-        const now = new Date();
-        const target = new Date(targetDate);
-        const diffHours = (target - now) / (1000 * 60 * 60);
-        
-        if (diffHours < 0) {
-            return { class: 'overdue', text: 'Overdue' };
-        } else if (diffHours < 24) {
-            return { class: 'due-soon', text: 'Due Soon' };
-        } else {
-            return { class: 'on-track', text: 'On Track' };
-        }
-    }
-    
-    async loadCaseMetrics(headers) {
-        try {
-            const url = '/api/cases/metrics';
-            console.log('Fetching case metrics from:', url);
-            const response = await fetch(url, { headers: headers });
-            console.log('Response status for case metrics:', response.status);
-            if (response.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(`Failed to load metrics: ${response.status} - ${errorText}`);
-            }
-            
-            const metrics = await response.json();
-            console.log('Received case metrics:', metrics);
-            
-            document.getElementById('totalCases').textContent = metrics.total_cases;
-            document.getElementById('openCases').textContent = metrics.open_cases;
-            document.getElementById('overdueCases').textContent = metrics.overdue_cases;
-            document.getElementById('avgResolutionTime').textContent = metrics.avg_resolution_days.toFixed(1);
-            
-                    } catch (error) {
-                        console.error('Error loading case metrics:', error);
-                        if (typeof AMLBase !== 'undefined' && AMLBase.showToast) {
-                            AMLBase.showToast('Failed to load case metrics', 'danger');
-                        }
-                    }    }
-    
-    async initCaseDistributionChart(headers) {
-        const ctx = document.getElementById('caseDistributionChart');
-        if (!ctx) return;
-
-        try {
-            const response = await fetch('/api/cases/distribution', { headers: headers });
-            if (response.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.error('API Error:', errorText); // Added explicit error logging
-                throw new Error(`Failed to load case distribution data: ${response.status} - ${errorText}`);
-            }
-            const data = await response.json();
-
-            new Chart(ctx, {
-                type: 'doughnut',
-                data: {
-                    labels: data.labels,
-                    datasets: [{
-                        data: data.data,
-                        backgroundColor: [
-                            '#17a2b8', // Open
-                            '#ffc107', // Investigating
-                            '#fd7e14', // Pending Review
-                            '#dc3545', // Escalated
-                            '#28a745'  // Closed
-                        ]
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            position: 'bottom'
-                        }
-                    }
-                }
-            });
-        } catch (error) {
-            console.error('Error loading case distribution chart:', error);
-            if (typeof AMLBase !== 'undefined' && AMLBase.showToast) {
-                AMLBase.showToast('Failed to load case distribution chart', 'danger');
-            }
-        }
-    }
-    
-    async loadUsersForAssignment(headers) {
-        try {
-            const response = await fetch('/api/admin/users', { headers: headers });
-            if (response.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!response.ok) throw new Error('Failed to load users');
-            
-            const users = await response.json();
-            
-            const createCaseAssignedTo = document.querySelector('#createCaseModal [name="assigned_to"]');
-            const updateCaseAssignedTo = document.querySelector('#updateCaseModal [name="assigned_to"]');
-
-            // Clear existing options except the first one ("Select Assignee")
-            createCaseAssignedTo.innerHTML = '<option value="">Select Assignee</option>';
-            updateCaseAssignedTo.innerHTML = '<option value="">Select Assignee</option>';
-
-            users.forEach(user => {
-                const option = document.createElement('option');
-                option.value = user.username;
-                option.textContent = user.full_name;
-                createCaseAssignedTo.appendChild(option);
-
-                const option2 = document.createElement('option');
-                option2.value = user.username;
-                option2.textContent = user.full_name;
-                updateCaseAssignedTo.appendChild(option2);
-            });
-            
-        } catch (error) {
-            console.error('Error loading users for assignment:', error);
-            AMLBase.showToast('Failed to load users for assignment', 'danger');
-        }
-    }
-    
-    showCreateCaseModal(manual = false, alertId = null) {
-        const modal = new bootstrap.Modal(document.getElementById('createCaseModal'));
-        const form = document.getElementById('createCaseForm');
-        form.reset();
-
-        const caseTypeAlertRadio = document.getElementById('caseTypeAlert');
-        const caseTypeManualRadio = document.getElementById('caseTypeManual');
-        
-        if (manual) {
-            caseTypeManualRadio.checked = true;
-        } else {
-            caseTypeAlertRadio.checked = true;
-        }
-
-        // Trigger change event to set initial state
-        const event = new Event('change');
-        (manual ? caseTypeManualRadio : caseTypeAlertRadio).dispatchEvent(event);
-
-        if (alertId) {
-            document.querySelector('#createCaseForm [name="alert_id"]').value = alertId;
-        }
-
-        modal.show();
-    }
-    
-    async handleCreateCase(e) {
-        e.preventDefault();
-        
-        try {
-            const formData = new FormData(e.target);
-            const caseData = Object.fromEntries(formData.entries());
-
-            const headers = this.getAuthHeaders();
-            if (!headers) return;
-
-            const response = await fetch('/api/cases/', {
-                method: 'POST',
-                headers: headers,
-                body: JSON.stringify(caseData)
-            });
-            if (response.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!response.ok) {
-                const errorText = await response.text(); // Get raw text
-                throw new Error(errorText || 'Failed to create case'); // Use raw text as error message
-            }
-            
-            AMLBase.showToast('Case created successfully', 'success');
-            
-            // Close modal and refresh
-            bootstrap.Modal.getInstance(document.getElementById('createCaseModal')).hide();
-            this.loadCases();
-            this.loadCaseMetrics();
-            
-        } catch (error) {
-            console.error('Error creating case:', error);
-            AMLBase.showToast(error.message, 'danger');
-        }
-    }
-    
-    showUpdateCaseModal(caseId) {
-        const modal = new bootstrap.Modal(document.getElementById('updateCaseModal'));
-        const form = document.getElementById('updateCaseForm');
-        form.reset(); // Clear previous data
-
-        // Fetch case details to populate the form
-        this.viewCaseDetails(caseId).then(caseData => {
-            if (caseData) {
-                // Populate form fields
-                form.querySelector('[name="status"]').value = caseData.status;
-                form.querySelector('[name="assigned_to"]').value = caseData.assigned_to || '';
-                // Assuming there's a notes field in the update modal
-                // form.querySelector('[name="notes"]').value = caseData.investigation_notes || ''; 
-                
-                this.currentCaseId = caseId; // Set current case ID for update
-                modal.show();
-            } else {
-                // If caseData is null, it means viewCaseDetails failed to find the case
-                AMLBase.showToast('Failed to load case details for update. Case not found or an error occurred.', 'danger');
-            }
-        }).catch(error => {
-            console.error('Error fetching case details for update modal:', error);
-            AMLBase.showToast('Error loading case details for update.', 'danger');
-        });
-    }
-
-    showCloseCaseModal(caseId) {
-        const modal = new bootstrap.Modal(document.getElementById('updateCaseModal'));
-        const form = document.getElementById('updateCaseForm');
-        form.reset();
-
-        // Pre-fill status to CLOSED
-        form.querySelector('[name="status"]').value = 'CLOSED';
-        // Optionally pre-fill notes or other fields for closing
-        form.querySelector('[name="notes"]').value = 'Case closed after investigation.';
-
-        this.currentCaseId = caseId;
-        modal.show();
-    }
-    
-    async viewCaseDetails(caseId) {
-        try {
-            const response = await fetch(`/api/cases/${caseId}`, { headers: this.getAuthHeaders() });
-            if (response.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!response.ok) throw new Error('Failed to load case details');
-            
-            const caseData = await response.json();
-            this.displayCaseDetails(caseData);
-            
-            const modal = new bootstrap.Modal(document.getElementById('caseDetailsModal'));
-            modal.show();
-            return caseData; // Return the fetched data
-            
-        } catch (error) {
-            console.error('Error loading case details:', error);
-            AMLBase.showToast('Failed to load case details', 'danger');
-            return null; // Return null on error
-        }
-    }
-    
-    displayCaseDetails(caseData) {
-        const content = document.getElementById('caseDetailsContent');
-        content.innerHTML = `
-            <div class="row">
-                <div class="col-md-6">
-                    <h6>Case Information</h6>
-                    <table class="table table-sm">
-                        <tr><td>Case Number</td><td>${caseData.case_number}</td></tr>
-                        <tr><td>Status</td><td><span class="status-badge status-${caseData.status.toLowerCase()}">${caseData.status}</span></td></tr>
-                        <tr><td>Priority</td><td><span class="status-badge status-${caseData.priority.toLowerCase()}">${caseData.priority}</span></td></tr>
-                        <tr><td>Assigned To</td><td>${caseData.assigned_to || 'Unassigned'}</td></tr>
-                        <tr><td>Created</td><td>${typeof AMLBase !== 'undefined' && AMLBase.formatDate ? AMLBase.formatDate(caseData.created_at) : caseData.created_at}</td></tr>
-                        <tr><td>Target Completion</td><td>${caseData.target_completion_date ? (typeof AMLBase !== 'undefined' && AMLBase.formatDate ? AMLBase.formatDate(caseData.target_completion_date) : caseData.target_completion_date) : 'Not set'}</td></tr>
-                    </table>
-                </div>
-                <div class="col-md-6">
-                    <h6>Alert Information</h6>
-                    <table class="table table-sm">
-                        <tr><td>Alert ID</td><td>${caseData.alert?.id || 'N/A'}</td></tr>
-                        <tr><td>Alert Type</td><td>${caseData.alert?.alert_type || 'N/A'}</td></tr>
-                        <tr><td>Risk Score</td><td>${caseData.alert?.risk_score ? (caseData.alert.risk_score * 100).toFixed(0) + '%' : 'N/A'}</td></tr>
-                        <tr><td>Customer ID</td><td>${caseData.alert?.customer_id || 'N/A'}</td></tr>
-                        <tr><td>Transaction ID</td><td>${caseData.alert?.transaction_id || 'N/A'}</td></tr>
-                    </table>
-                </div>
-            </div>
-            
-            <div class="mt-4">
-                <h6>Case Description</h6>
-                <p>${caseData.description || 'No description provided'}</p>
-            </div>
-            
-            <div class="mt-4">
-                <h6>Investigation Notes</h6>
-                <div class="bg-light p-3 rounded">
-                    ${caseData.investigation_notes || 'No investigation notes yet'}
-                </div>
-            </div>
-            
-            <div class="mt-4">
-                <h6>Case Activity Timeline</h6>
-                <div id="caseTimeline">
-                    ${this.generateCaseTimeline(caseData.activities || [])}
-                </div>
-            </div>
-        `;
-        
-        this.currentCaseId = caseData.id;
-    }
-    
-    generateCaseTimeline(activities) {
-        if (!activities.length) {
-            return '<p class="text-muted">No activity recorded</p>';
-        }
-        
-        return activities.map(activity => `
-            <div class="timeline-item">
-                <div class="timeline-marker">
-                    <i class="fas fa-circle"></i>
-                </div>
-                <div class="timeline-content">
-                    <div class="timeline-header">
-                        <strong>${activity.activity_type.replace('_', ' ')}</strong>
-                        <span class="text-muted ms-2">${typeof AMLBase !== 'undefined' && AMLBase.formatDate ? AMLBase.formatDate(activity.performed_at) : activity.performed_at}</span>
-                    </div>
-                    <div class="timeline-body">
-                        <p>${activity.description}</p>
-                        <small class="text-muted">by ${activity.performed_by}</small>
-                    </div>
-                </div>
-            </div>
-        `).join('');
-    }
-    
-    applyFilters() {
-        const status = document.getElementById('caseStatusFilter').value;
-        const priority = document.getElementById('casePriorityFilter').value;
-        const assigned_to = document.getElementById('assigneeFilter').value;
-
-        const params = new URLSearchParams();
-        if (status) params.append('status', status);
-        if (priority) params.append('priority', priority);
-        if (assigned_to) params.append('assigned_to', assigned_to);
-
-        this.loadCases(params.toString());
-    }
-    
-    async exportCases() {
-        try {
-            const response = await fetch('/api/cases/export', { headers: this.getAuthHeaders() });
-            if (response.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!response.ok) throw new Error('Failed to export cases');
-            
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `cases_${new Date().toISOString().split('T')[0]}.csv`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
-            
-            AMLBase.showToast('Cases exported successfully', 'success');
-            
-        } catch (error) {
-            console.error('Error exporting cases:', error);
-            AMLBase.showToast('Failed to export cases', 'danger');
-        }
-    }
-
-    async handleUpdateCase(e) {
-        e.preventDefault();
-        const formData = new FormData(e.target);
-        const data = Object.fromEntries(formData.entries());
-
-        try {
-            const response = await fetch(`/api/cases/${this.currentCaseId}` , {
-                method: 'PUT',
-                headers: this.getAuthHeaders(),
-                body: JSON.stringify(data)
-            });
-            if (response.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!response.ok) throw new Error('Failed to update case');
-
-            AMLBase.showToast('Case updated successfully', 'success');
-            bootstrap.Modal.getInstance(document.getElementById('updateCaseModal')).hide();
-            this.loadCases();
-        } catch (error) {
-            console.error('Error updating case:', error);
-            AMLBase.showToast('Failed to update case', 'danger');
-        }
-    }
-}
-
-// Initialize case management when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-    window.caseManagement = new CaseManagement();
-});
+// Any additional page-specific scripts or initializations can go here
 </script>
 
 <style>

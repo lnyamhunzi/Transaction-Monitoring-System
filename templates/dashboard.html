@@ -27,7 +27,7 @@
     </div>
     
     <div class="metric-card">
-        <div class="metric-value" id="cases-opened">0</div>
+        <div class="metric-value" id="cases-opened-today">0</div>
         <div class="metric-label">Cases Opened Today</div>
         <div class="metric-change change-positive" id="cases-change">+3</div>
     </div>
@@ -50,7 +50,7 @@
                         <button class="btn btn-outline-success" id="exportAlerts">
                             <i class="fas fa-download"></i> Export
                         </button>
-                        <a href="/staff/monitoring/real-time" class="btn btn-primary">
+                        <a href="/monitoring/real-time" class="btn btn-primary">
                             <i class="fas fa-eye"></i> Real-time View
                         </a>
                     </div>
@@ -286,6 +286,9 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<!-- Case Management JavaScript (needed for Create Case modal) -->
+<script src="/static/js/case-management.js"></script>
+
 <!-- Dashboard JavaScript -->
 <script src="/static/js/dashboard.js"></script>
 

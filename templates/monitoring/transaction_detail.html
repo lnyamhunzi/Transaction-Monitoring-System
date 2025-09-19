@@ -5,37 +5,22 @@
 {% block page_title %}Transaction Details{% endblock %}
 
 {% block content %}
-<div class="card">
-    <div class="card-body">
-        <h5 class="card-title">Transaction ID: <span id="transactionId">{{ transaction.id }}</span></h5>
-        <div class="row mb-3">
-            <div class="col-md-6">
-                <p><strong>Customer ID:</strong> {{ transaction.customer_id }}</p>
-                <p><strong>Amount:</strong> {{ transaction.amount }} {{ transaction.currency }}</p>
-                <p><strong>Type:</strong> {{ transaction.transaction_type }}</p>
-                <p><strong>Channel:</strong> {{ transaction.channel }}</p>
-                <p><strong>Status:</strong> {{ transaction.status }}</p>
-            </div>
-            <div class="col-md-6">
-                <p><strong>Created At:</strong> {{ transaction.created_at }}</p>
-                <p><strong>Risk Score:</strong> {{ transaction.risk_score }}</p>
-                <p><strong>ML Prediction:</strong> {{ transaction.ml_prediction }}</p>
-                <p><strong>Narrative:</strong> {{ transaction.narrative }}</p>
-                <p><strong>Processed By:</strong> {{ transaction.processed_by }}</p>
-            </div>
+<div class="container-fluid">
+    <div class="card">
+        <div class="card-header">
+            <h5 class="card-title mb-0">Transaction ID: {{ transaction.id }}</h5>
         </div>
-        <hr>
-        <h6>Counterparty Details</h6>
-        <div class="row mb-3">
-            <div class="col-md-6">
-                <p><strong>Counterparty Account:</strong> {{ transaction.counterparty_account }}</p>
-                <p><strong>Counterparty Name:</strong> {{ transaction.counterparty_name }}</p>
-            </div>
-            <div class="col-md-6">
-                <p><strong>Counterparty Bank:</strong> {{ transaction.counterparty_bank }}</p>
-            </div>
+        <div class="card-body">
+            <p><strong>Customer ID:</strong> {{ transaction.customer_id }}</p>
+            <p><strong>Amount:</strong> {{ transaction.amount }} {{ transaction.currency }}</p>
+            <p><strong>Type:</strong> {{ transaction.transaction_type }}</p>
+            <p><strong>Channel:</strong> {{ transaction.channel }}</p>
+            <p><strong>Status:</strong> {{ transaction.status }}</p>
+            <p><strong>Date:</strong> {{ transaction.created_at }}</p>
+            <p><strong>Narrative:</strong> {{ transaction.narrative }}</p>
+            <!-- Add more transaction details as needed -->
+            <a href="/monitoring/transactions" class="btn btn-secondary mt-3">Back to Transactions</a>
         </div>
-        <a href="/staff/monitoring/transactions" class="btn btn-secondary">Back to Transactions</a>
     </div>
 </div>
 {% endblock %}

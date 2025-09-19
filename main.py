@@ -234,6 +234,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8090, reload=True)
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -396,6 +400,14 @@ class CaseUpdate(BaseModel):
     status: str
     notes: str
     assigned_to: Optional[str] = None
+
+class CaseEscalate(BaseModel):
+    escalation_reason: str
+    escalated_to: str
+
+class CaseClose(BaseModel):
+    decision: str
+    rationale: str
 
 class BulkAlertAction(BaseModel):
     alert_ids: List[str]
@@ -816,6 +828,18 @@ async def monotoring_transactions(request: Request, current_user: User = Depends
     if isinstance(current_user, RedirectResponse):
         return current_user
     return templates.TemplateResponse('monitoring/transactions.html', {"request": request, "user": current_user})
+
+@app.get('/monitoring/transactions/{transaction_id}', response_class=HTMLResponse)
+async def view_transaction_detail(transaction_id: str, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+    
+    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    
+    return templates.TemplateResponse('monitoring/transaction_detail.html', {"request": request, "user": current_user, "transaction": transaction})
+
 
 @app.get('/monitoring/customers', response_class=HTMLResponse)
 async def monotoring_customers(request: Request, current_user: User = Depends(get_current_user_from_cookie)):
@@ -1829,6 +1853,115 @@ async def update_sanctions(background_tasks: BackgroundTasks, db: Session = Depe
     return {"message": "Sanctions lists update started successfully."}
 
 
+@app.get("/api/dashboard/stats")
+async def get_dashboard_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+
+    today = datetime.now().date()
+    start_of_day = datetime.combine(today, datetime.min.time())
+    yesterday = today - timedelta(days=1)
+    start_of_yesterday = datetime.combine(yesterday, datetime.min.time())
+
+    # Calculate current KPI values (counting all for now to ensure non-zero display if data exists)
+    today_transactions = db.query(Transaction).count() or 0 # Count all transactions
+    open_alerts = db.query(Alert).count() or 0 # Count all alerts
+    high_risk_alerts = db.query(Alert).count() or 0 # Count all alerts
+    cases_opened_today = db.query(Case).count() or 0 # Count all cases
+
+    # Calculate yesterday's values for change percentages (these remain specific to yesterday's data)
+    yesterday_transactions = db.query(Transaction).filter(Transaction.created_at >= start_of_yesterday, Transaction.created_at < start_of_day).count() or 0
+    yesterday_open_alerts = db.query(Alert).filter(Alert.status == "OPEN", Alert.created_at >= start_of_yesterday, Alert.created_at < start_of_day).count() or 0
+    yesterday_cases_opened = db.query(Case).filter(Case.created_at >= start_of_yesterday, Case.created_at < start_of_day).count() or 0
+
+    # Calculate changes as percentages
+    transactions_change = ((today_transactions - yesterday_transactions) / yesterday_transactions * 100) if yesterday_transactions else 0
+    alerts_change = ((open_alerts - yesterday_open_alerts) / yesterday_open_alerts * 100) if yesterday_open_alerts else 0
+    cases_change = ((cases_opened_today - yesterday_cases_opened) / yesterday_cases_opened * 100) if yesterday_cases_opened else 0
+
+    # Ensure changes are integers for display if preferred, or keep as float for precision
+    transactions_change = int(transactions_change) if transactions_change is not None else 0
+    alerts_change = int(alerts_change) if alerts_change is not None else 0
+    cases_change = int(cases_change) if cases_opened_today is not None else 0
+
+    risk_distribution = db.query(
+        func.round(Alert.risk_score, 1).label("avg_risk"),
+        func.count(Alert.id).label("count")
+    ).group_by(func.round(Alert.risk_score, 1)).all()
+
+    seven_days_ago = start_of_day - timedelta(days=7)
+    alert_trends_data = db.query(
+        func.date(Alert.created_at).label("date"),
+        func.sum(case((Alert.risk_score >= 0.7, 1), else_=0)).label("high_risk_count"),
+        func.sum(case((and_(Alert.risk_score >= 0.4, Alert.risk_score < 0.7), 1), else_=0)).label("medium_risk_count")
+    ).filter(Alert.created_at >= seven_days_ago).group_by(func.date(Alert.created_at)).all()
+
+    alert_trends = {
+        "labels": [(seven_days_ago + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(8)],
+        "high_risk": [0] * 8,
+        "medium_risk": [0] * 8
+    }
+
+    for d in alert_trends_data:
+        try:
+            idx = (d.date - seven_days_ago.date()).days
+            alert_trends["high_risk"][idx] = d.high_risk_count
+            alert_trends["medium_risk"][idx] = d.medium_risk_count
+        except (IndexError, AttributeError):
+            pass
+
+    return {
+        "today_transactions": today_transactions,
+        "transactions_change": transactions_change,
+        "open_alerts": open_alerts,
+        "alerts_change": alerts_change,
+        "high_risk_alerts": high_risk_alerts,
+        "cases_opened_today": cases_opened_today,
+        "cases_change": cases_change,
+        "risk_distribution": [{"avg_risk": r.avg_risk, "count": r.count} for r in risk_distribution],
+        "alert_trends": alert_trends,
+    }
+
+@app.get("/api/dashboard/aml-control-summary")
+async def get_aml_control_summary(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+
+    summary = db.query(
+        Alert.alert_type,
+        func.count(Alert.id).label("triggered_count"),
+        func.avg(Alert.risk_score).label("average_risk_score")
+    ).group_by(Alert.alert_type).all()
+
+    return [{"control_type": s.alert_type, "triggered_count": s.triggered_count, "average_risk_score": s.average_risk_score} for s in summary]
+
+@app.get("/api/reports/charts-data")
+async def get_charts_data(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+    if isinstance(current_user, RedirectResponse):
+        return current_user
+
+    thirty_days_ago = datetime.now().date() - timedelta(days=30)
+    volume_trends_data = db.query(
+        func.date(Transaction.created_at).label("date"),
+        func.sum(Transaction.amount).label("total_volume")
+    ).filter(Transaction.created_at >= thirty_days_ago).group_by(func.date(Transaction.created_at)).all()
+
+    volume_trends = {
+        "labels": [(thirty_days_ago + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(31)],
+        "total_volume": [0] * 31
+    }
+
+    for d in volume_trends_data:
+        try:
+            idx = (d.date - thirty_days_ago).days
+            volume_trends["total_volume"][idx] = d.total_volume
+        except (IndexError, AttributeError):
+            pass
+
+    return {
+        "volume_trends": volume_trends
+    }
+
 @app.get("/api/monitoring/transactions/recent")
 async def get_recent_transactions(db: Session = Depends(get_db), limit: int = 50, current_user: User = Depends(get_current_user_dependency)):
     transactions = db.query(Transaction).order_by(desc(Transaction.created_at)).limit(limit).all()
@@ -1914,6 +2047,23 @@ async def get_recent_alerts(
     if limit is not None:
         alerts = alerts.limit(limit)
     alerts = alerts.all()
+
+    return [
+        {
+            "id": str(a.id),
+            "alert_type": a.alert_type,
+            "risk_score": a.risk_score,
+            "status": a.status.value if hasattr(a.status, 'value') else str(a.status),
+            "timestamp": a.created_at.isoformat(),
+            "customer_id": a.transaction.customer_id if a.transaction else None,
+            "description": a.description,
+            "transaction_id": str(a.transaction_id),
+            "transaction": {
+                "amount": a.transaction.amount,
+                "currency": a.transaction.currency
+            }
+        } for a in alerts
+    ]
 
 
 
@@ -2303,10 +2453,10 @@ async def get_alerts(
             status=alert.status.value if hasattr(alert.status, 'value') else str(alert.status),
             created_at=alert.created_at,
             transaction_id=alert.transaction_id,
-            customer_id=alert.transaction.customer_id if alert.transaction else "",
+            customer_id=alert.transaction.customer_id if alert.transaction else None,
             description=alert.description,
-            transaction_amount=alert.transaction.amount if alert.transaction else None,
-            transaction_currency=alert.transaction.currency if alert.transaction else None,
+            transaction_amount=alert.transaction.amount if alert.transaction else 0.0, # Default to 0.0 if None
+            transaction_currency=alert.transaction.currency if alert.transaction else "USD", # Default to "USD" if None,
         )
         for alert in alerts
     ]
@@ -2455,7 +2605,7 @@ async def get_cases(
                 status=case.alert.status.value if hasattr(case.alert.status, 'value') else str(case.alert.status),
                 created_at=case.alert.created_at,
                 transaction_id=case.alert.transaction_id,
-                customer_id=case.alert.transaction.customer_id if case.alert.transaction else "",
+                customer_id=case.alert.transaction.customer_id if case.alert.transaction else None,
                 description=case.alert.description,
                 transaction_amount=case.alert.transaction.amount if case.alert.transaction else None,
                 transaction_currency=case.alert.transaction.currency if case.alert.transaction else None,
@@ -2876,6 +3026,44 @@ async def get_dashboard_stats(db: Session = Depends(get_db), current_user: User 
             "medium_risk": [row[2] for row in alert_trends]
         }
     }
+    logger.debug(f"Calculated KPI values: Total Transactions: {total_transactions}, Today Transactions: {today_transactions}, Open Alerts: {open_alerts}, High Risk Alerts: {high_risk_alerts}, Cases Opened Today: {cases_opened_today}") # Added debug log
+    logger.info(f"Dashboard stats: {response_data}")
+    return response_data
+
+    # Risk distribution
+    risk_distribution = db.query(
+        Alert.alert_type,
+        func.avg(Alert.risk_score).label('avg_risk'),
+        func.count(Alert.id).label('count')
+    ).group_by(Alert.alert_type).all()
+    
+    # Alert Trends
+    alert_trends = db.query(func.date(Alert.created_at), func.sum(case((Alert.risk_score >= 0.8, 1), else_=0)), func.sum(case((Alert.risk_score >= 0.6, 1), else_=0))).group_by(func.date(Alert.created_at)).order_by(func.date(Alert.created_at)).all()
+
+    response_data = {
+        "total_transactions": total_transactions,
+        "today_transactions": today_transactions,
+        "transactions_change": round(transactions_change, 2),
+        "open_alerts": open_alerts,
+        "high_risk_alerts": high_risk_alerts,
+        "alerts_change": round(alerts_change, 2),
+        "cases_opened_today": cases_opened_today,
+        "cases_change": round(cases_change, 2),
+        "risk_distribution": [
+            {
+                "type": item.alert_type,
+                "avg_risk": float(item.avg_risk or 0),
+                "count": item.count
+            }
+            for item in risk_distribution
+        ],
+        "alert_trends": {
+            "labels": [str(row[0]) for row in alert_trends],
+            "high_risk": [row[1] for row in alert_trends],
+            "medium_risk": [row[2] for row in alert_trends]
+        }
+    }
+    logger.debug(f"Calculated KPI values: Total Transactions: {total_transactions}, Today Transactions: {today_transactions}, Open Alerts: {open_alerts}, High Risk Alerts: {high_risk_alerts}, Cases Opened Today: {cases_opened_today}") # Added debug log
     logger.info(f"Dashboard stats: {response_data}")
     return response_data
 
@@ -2925,34 +3113,43 @@ async def update_case(
     
     return {"message": "Case updated"}
 
-@app.post("/api/cases/")
-async def create_case(
-    case_data: CreateCaseRequest, # Use the Pydantic model
+@app.put("/api/cases/{case_id}/escalate")
+async def escalate_case_api(
+    case_id: str,
+    escalate_data: CaseEscalate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency)
 ):
-    logger.info(f"Creating case with data: {case_data.dict()}") # Log the Pydantic model dict
-    try:
-        new_case = await case_service.create_case(
-            db=db,
-            alert_id=case_data.alert_id,
-            title=case_data.title,
-            description=case_data.description,
-            priority=case_data.priority,
-            assigned_to=case_data.assigned_to,
-            investigation_notes=case_data.investigation_notes,
-            target_completion_date=case_data.target_completion_date # Pass datetime object
-        )
-        return {"message": "Case created successfully", "case_id": new_case.id}
-    except HTTPException as e:
-        logger.error(f"Error creating case: {e.status_code}: {e.detail}")
-        return JSONResponse(status_code=e.status_code, content={"message": e.detail})
-    except ValueError as ve:
-        logger.error(f"Validation error creating case: {ve}")
-        raise HTTPException(status_code=400, detail=str(ve))
-    except Exception as e:
-        logger.error(f"Error creating case: {e}", exc_info=True) # Log traceback
-        raise HTTPException(status_code=500, detail="Internal Server Error during case creation")
+    """Escalate a case"""
+    case = await case_service.escalate_case(
+        case_id,
+        escalate_data.escalation_reason,
+        current_user.username,
+        escalate_data.escalated_to,
+        db
+    )
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return {"message": "Case escalated successfully"}
+
+@app.put("/api/cases/{case_id}/close")
+async def close_case_api(
+    case_id: str,
+    close_data: CaseClose,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency)
+):
+    """Close a case"""
+    success = await case_service.close_case(
+        case_id,
+        close_data.decision,
+        close_data.rationale,
+        current_user.username,
+        db
+    )
+    if not success:
+        raise HTTPException(status_code=404, detail="Case not found or could not be closed")
+    return {"message": "Case closed successfully"}
 
 
 

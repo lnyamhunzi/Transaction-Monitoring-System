@@ -108,6 +108,22 @@ body {
     color: #1e3a5f;
 }
 
+/* Scrollbar for card bodies that might contain forms or extensive content */
+.card-body {
+    /* Ensure content doesn't overflow horizontally unless explicitly allowed */
+    overflow-x: hidden;
+    /* Allow vertical scrolling if content exceeds a certain height */
+    max-height: 400px; /* Adjust as needed, or make it dynamic with JS */
+    overflow-y: auto;
+}
+
+/* Specific styling for filter sections if they need a constrained height */
+.filter-section {
+    max-height: 250px; /* Example height, adjust based on actual content */
+    overflow-y: auto;
+    padding-right: 10px; /* To prevent scrollbar from overlapping content */
+}
+
 /* Table styling */
 .table thead th {
     background-color: #f8f9fa;
