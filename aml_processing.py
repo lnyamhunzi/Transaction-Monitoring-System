@@ -55,7 +55,12 @@ async def process_transaction_controls(transaction_id: str, transaction_data: di
         risk_score = await risk_engine.calculate_risk_score(transaction_data, db)
         transaction.risk_score = risk_score
         logger.info(f"[process_transaction_controls] Risk score calculated for {transaction_id}: {risk_score}")
-        
+
+        # Update customer's overall risk rating after transaction processing
+        customer_id = transaction_data.get('customer_id')
+        if customer_id:
+            await risk_engine.update_customer_overall_risk_rating(customer_id, db)
+
         # Sanctions screening
         logger.info(f"[process_transaction_controls] Running sanctions screening for {transaction_id}")
         sanctions_result = await sanctions_engine.screen_transaction(transaction_data, db)

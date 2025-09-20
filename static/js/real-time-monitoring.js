@@ -753,23 +753,38 @@ class RealTimeMonitor {
     /**
      * Update transaction volume chart
      */
-    updateVolumeChart() {
+    updateVolumeChart(historicalData = null) {
         if (!this.charts.transactionVolume) return;
 
         const chart = this.charts.transactionVolume;
-        const now = new Date();
+        const dataToProcess = historicalData || this.monitoringData.transactions;
 
-        // Aggregate volume for the last minute
-        const recentTransactions = this.monitoringData.transactions.filter(
-            t => new Date(t.timestamp) > new Date(now.getTime() - 60000)
-        );
-        const volume = recentTransactions.reduce((sum, t) => sum + t.amount, 0);
+        // Clear existing data if historicalData is provided (for initial load)
+        if (historicalData) {
+            chart.data.labels = [];
+            chart.data.datasets[0].data = [];
+        }
 
-        // Add data point
-        chart.data.labels.push(now);
-        chart.data.datasets[0].data.push(volume);
+        // Aggregate volume per minute for the processed data
+        const aggregatedVolume = {};
+        dataToProcess.forEach(t => {
+            const transactionTime = new Date(t.timestamp);
+            // Round down to the nearest minute for aggregation
+            const minuteKey = new Date(transactionTime.getFullYear(), transactionTime.getMonth(), transactionTime.getDate(), transactionTime.getHours(), transactionTime.getMinutes(), 0, 0).getTime();
+            
+            if (!aggregatedVolume[minuteKey]) {
+                aggregatedVolume[minuteKey] = 0;
+            }
+            aggregatedVolume[minuteKey] += t.amount;
+        });
 
-        // Keep only last 20 data points
+        // Sort and add aggregated data to chart
+        Object.keys(aggregatedVolume).sort().forEach(minuteKey => {
+            chart.data.labels.push(new Date(parseInt(minuteKey)));
+            chart.data.datasets[0].data.push(aggregatedVolume[minuteKey]);
+        });
+
+        // Keep only last 20 data points (or all if less than 20)
         if (chart.data.labels.length > 20) {
             chart.data.labels = chart.data.labels.slice(-20);
             chart.data.datasets[0].data = chart.data.datasets[0].data.slice(-20);
@@ -781,24 +796,43 @@ class RealTimeMonitor {
     /**
      * Update alert trends chart
      */
-    updateAlertTrendsChart() {
+    updateAlertTrendsChart(historicalData = null) {
         if (!this.charts.alertTrends) return;
 
         const chart = this.charts.alertTrends;
-        const now = new Date();
+        const dataToProcess = historicalData || this.monitoringData.alerts;
 
-        // Aggregate alerts for the last minute
-        const recentAlerts = this.monitoringData.alerts.filter(
-            a => new Date(a.timestamp) > new Date(now.getTime() - 60000)
-        );
-        const highRiskAlerts = recentAlerts.filter(a => a.risk_score >= 0.8);
+        // Clear existing data if historicalData is provided (for initial load)
+        if (historicalData) {
+            chart.data.labels = [];
+            chart.data.datasets[0].data = [];
+            chart.data.datasets[1].data = [];
+        }
 
-        // Add data point
-        chart.data.labels.push(now);
-        chart.data.datasets[0].data.push(recentAlerts.length);
-        chart.data.datasets[1].data.push(highRiskAlerts.length);
+        // Aggregate alerts per minute for the processed data
+        const aggregatedAlerts = {};
+        dataToProcess.forEach(a => {
+            const alertTime = new Date(a.timestamp);
+            // Round down to the nearest minute for aggregation
+            const minuteKey = new Date(alertTime.getFullYear(), alertTime.getMonth(), alertTime.getDate(), alertTime.getHours(), alertTime.getMinutes(), 0, 0).getTime();
+            
+            if (!aggregatedAlerts[minuteKey]) {
+                aggregatedAlerts[minuteKey] = { total: 0, highRisk: 0 };
+            }
+            aggregatedAlerts[minuteKey].total++;
+            if (a.risk_score >= 0.8) {
+                aggregatedAlerts[minuteKey].highRisk++;
+            }
+        });
 
-        // Keep only last 20 data points
+        // Sort and add aggregated data to chart
+        Object.keys(aggregatedAlerts).sort().forEach(minuteKey => {
+            chart.data.labels.push(new Date(parseInt(minuteKey)));
+            chart.data.datasets[0].data.push(aggregatedAlerts[minuteKey].total);
+            chart.data.datasets[1].data.push(aggregatedAlerts[minuteKey].highRisk);
+        });
+
+        // Keep only last 20 data points (or all if less than 20)
         if (chart.data.labels.length > 20) {
             chart.data.labels = chart.data.labels.slice(-20);
             chart.data.datasets[0].data = chart.data.datasets[0].data.slice(-20);
@@ -1090,8 +1124,9 @@ class RealTimeMonitor {
             
             // Initial chart updates
             this.updateRiskDistributionChart();
-            this.updateAlertTrendsChart();
-            this.updateVolumeChart(); // Ensure volume chart is updated on initial load
+            this.updateAlertTrendsChart(this.monitoringData.alerts);
+            this.updateVolumeChart(this.monitoringData.transactions);
+            this.updateTransactionFlowChart(); // Ensure transaction flow chart is updated on initial load
             
         } catch (error) {
             console.error('Error loading initial data:', error);

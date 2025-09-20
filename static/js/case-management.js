@@ -140,6 +140,16 @@ class CaseManagement {
                 this.showEscalateCaseModal(caseId);
             }
         });
+
+        // Buttons inside Case Details Modal
+        const updateCaseDetailsBtn = document.getElementById('updateCaseBtn');
+        if (updateCaseDetailsBtn) updateCaseDetailsBtn.addEventListener('click', () => this.showUpdateCaseModal(this.currentCaseId));
+
+        const closeCaseDetailsBtn = document.getElementById('closeCaseBtn');
+        if (closeCaseDetailsBtn) closeCaseDetailsBtn.addEventListener('click', () => this.showCloseCaseModal(this.currentCaseId));
+
+        const escalateCaseDetailsBtn = document.getElementById('escalateCaseBtn');
+        if (escalateCaseDetailsBtn) escalateCaseDetailsBtn.addEventListener('click', () => this.showEscalateCaseModal(this.currentCaseId));
     }
     
     async loadCases(queryString = '') {
@@ -187,16 +197,16 @@ class CaseManagement {
                 </div>`,
                 `<div class="btn-group btn-group-sm">
                     <button class="btn btn-outline-primary view-case-btn" data-case-id="${caseData.id}">
-                        <i class="fas fa-eye"></i>
+                        <i class="fas fa-eye" style="pointer-events: none;"></i>
                     </button>
                     <button class="btn btn-outline-secondary update-case-btn" data-case-id="${caseData.id}">
-                        <i class="fas fa-edit"></i>
+                        <i class="fas fa-edit" style="pointer-events: none;"></i>
                     </button>
                     <button class="btn btn-outline-success close-case-btn" data-case-id="${caseData.id}">
-                        <i class="fas fa-check"></i>
+                        <i class="fas fa-check" style="pointer-events: none;"></i>
                     </button>
                     <button class="btn btn-outline-info escalate-case-btn" data-case-id="${caseData.id}">
-                        <i class="fas fa-arrow-up"></i>
+                        <i class="fas fa-arrow-up" style="pointer-events: none;"></i>
                     </button>
                 </div>`
             ]);

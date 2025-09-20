@@ -7,6 +7,7 @@ from typing import Dict, Any, List
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, desc, func
+from models import RiskRating
 
 from models import Transaction, Customer, Alert
 from utils import calculate_customer_risk_factors
@@ -185,31 +186,30 @@ class RiskScoringEngine:
             
             customer = db.query(Customer).filter(Customer.customer_id == customer_id).first()
             if not customer:
-                return 0.8  # High risk for unknown customer
+                return 0.7  # High risk for unknown customer
             
             customer_risk = 0.0
             
-            # Risk based on customer rating
+            # Start with a base risk based on customer's current rating, but allow other factors to override
             if customer.risk_rating.value == 'CRITICAL':
-                customer_risk = 0.9
+                customer_risk = max(customer_risk, 0.7)
             elif customer.risk_rating.value == 'HIGH':
-                customer_risk = 0.7
+                customer_risk = max(customer_risk, 0.5)
             elif customer.risk_rating.value == 'MEDIUM':
-                customer_risk = 0.4
-            else:  # LOW
-                customer_risk = 0.1
+                customer_risk = max(customer_risk, 0.4)
+            # If LOW, customer_risk remains 0.0 initially, and other factors will increase it
             
-            # PEP status increases risk
+            # PEP status significantly increases risk
             if customer.is_pep:
-                customer_risk = min(1.0, customer_risk + 0.3)
+                customer_risk = max(customer_risk, 0.8) # High inherent risk for PEP
             
             # New customer risk
             if customer.account_opening_date:
                 days_since_opening = (datetime.now() - customer.account_opening_date).days
                 if days_since_opening < 30:  # New customer
-                    customer_risk = min(1.0, customer_risk + 0.2)
+                    customer_risk = max(customer_risk, 0.6) # Medium-high risk for new customers
                 elif days_since_opening < 90:  # Recently opened
-                    customer_risk = min(1.0, customer_risk + 0.1)
+                    customer_risk = max(customer_risk, 0.3) # Medium risk for recently opened
             
             # High-risk occupations
             high_risk_occupations = [
@@ -219,10 +219,10 @@ class RiskScoringEngine:
             if customer.occupation:
                 for occupation in high_risk_occupations:
                     if occupation in customer.occupation.upper():
-                        customer_risk = min(1.0, customer_risk + 0.2)
+                        customer_risk = max(customer_risk, 0.7) # High risk for high-risk occupation
                         break
             
-            return customer_risk
+            return min(1.0, customer_risk) # Ensure it doesn't exceed 1.0
             
         except Exception as e:
             logger.error(f"Error calculating customer risk: {e}")
@@ -361,7 +361,80 @@ class RiskScoringEngine:
         except Exception as e:
             logger.error(f"Error calculating customer average amount: {e}")
             return 0.0
-    
+
+    async def update_customer_overall_risk_rating(self, customer_id: str, db: Session):
+        """Calculate and update a customer's overall risk rating based on recent activity and alerts."""
+        try:
+            customer = db.query(Customer).filter(Customer.customer_id == customer_id).first()
+            if not customer:
+                logger.warning(f"Customer {customer_id} not found for risk rating update.")
+                return
+
+            # Factors for overall customer risk:
+            # 1. Average risk score of recent transactions
+            # 2. Highest risk score of any active alerts
+            # 3. Number of recent alerts
+
+            overall_risk_score = 0.0
+            contributing_factors = []
+
+            # Factor 1: Average risk score of recent transactions (e.g., last 30 days)
+            thirty_days_ago = datetime.now() - timedelta(days=30)
+            recent_transactions = db.query(Transaction.risk_score).filter(
+                and_(
+                    Transaction.customer_id == customer_id,
+                    Transaction.created_at >= thirty_days_ago
+                )
+            ).all()
+
+            if recent_transactions:
+                avg_txn_risk = sum([t.risk_score for t in recent_transactions]) / len(recent_transactions)
+                overall_risk_score += avg_txn_risk * 0.6  # Increased weight for average transaction risk
+                contributing_factors.append(f"Avg Txn Risk: {avg_txn_risk:.2f}")
+
+            # Factor 2: Highest risk score of any active alerts
+            active_alerts = db.query(Alert).join(Transaction).filter(
+                and_(
+                    Transaction.customer_id == customer_id,
+                    Alert.status.in_(['OPEN', 'INVESTIGATING'])
+                )
+            ).all()
+
+            if active_alerts:
+                max_alert_risk = max([alert.risk_score for alert in active_alerts])
+                overall_risk_score += max_alert_risk * 0.4  # Increased weight for highest alert risk
+                contributing_factors.append(f"Max Alert Risk: {max_alert_risk:.2f}")
+
+            # Factor 3: Number of recent alerts (e.g., last 30 days)
+            recent_alerts_count = db.query(Alert).join(Transaction).filter(
+                and_(
+                    Transaction.customer_id == customer_id,
+                    Alert.created_at >= thirty_days_ago
+                )
+            ).count()
+
+            if recent_alerts_count > 0:
+                overall_risk_score += min(0.3, recent_alerts_count * 0.1) # Increased contribution per alert, capped
+                contributing_factors.append(f"Recent Alerts: {recent_alerts_count}")
+
+            # Ensure overall_risk_score is within [0, 1] range
+            overall_risk_score = max(0.0, min(1.0, overall_risk_score))
+
+            new_risk_category_str = self.get_risk_category(overall_risk_score)
+            new_risk_category_enum = RiskRating[new_risk_category_str] # Convert string to Enum member
+            
+            if customer.risk_rating != new_risk_category_enum:
+                logger.info(f"Updating customer {customer_id} risk rating from {customer.risk_rating.value} to {new_risk_category_enum.value} (Score: {overall_risk_score:.2f}). Factors: {', '.join(contributing_factors)}")
+                customer.risk_rating = new_risk_category_enum # Update the enum value
+                db.add(customer)
+                db.commit()
+                db.refresh(customer)
+            else:
+                logger.info(f"Customer {customer_id} risk rating remains {customer.risk_rating.value} (Score: {overall_risk_score:.2f}). Factors: {', '.join(contributing_factors)}")
+
+        except Exception as e:
+            logger.error(f"Error updating customer overall risk rating for {customer_id}: {e}")
+
     async def analyze_customer_patterns(self, customer_id: str, db: Session) -> Dict[str, List]:
         """Analyze customer's transaction patterns"""
         try:
@@ -401,11 +474,11 @@ class RiskScoringEngine:
     
     def get_risk_category(self, risk_score: float) -> str:
         """Convert risk score to risk category"""
-        if risk_score >= 0.8:
+        if risk_score >= 0.7: # Lowered from 0.8
             return "CRITICAL"
-        elif risk_score >= 0.6:
+        elif risk_score >= 0.50: # Lowered from 0.6
             return "HIGH"
-        elif risk_score >= 0.4:
+        elif risk_score >= 0.35: # Lowered from 0.4
             return "MEDIUM"
         else:
             return "LOW"

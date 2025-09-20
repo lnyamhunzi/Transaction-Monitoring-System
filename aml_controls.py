@@ -7,12 +7,15 @@ from typing import Dict, Any, List
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc, func
+import numpy as np
 
 from models import Transaction, Customer, Alert, User, Account
 from utils import calculate_transaction_velocity, get_customer_transaction_history
 from sanctions_screening import SanctionsScreeningEngine
 
 logger = logging.getLogger(__name__)
+
+
 
 class AMLControlEngine:
     """Comprehensive AML Control Engine implementing all banking controls"""
@@ -181,7 +184,7 @@ class AMLControlEngine:
             logger.info(f"Insufficient history for unusual_incoming: {len(historical_transactions)} transactions")
             return {'triggered': False, 'risk_score': 0.0, 'description': 'Insufficient transaction history', 'metadata': {}}
         
-        historical_amounts = [t.base_amount for t in historical_transactions]
+        historical_amounts = [t.amount for t in historical_transactions]
         avg_amount = sum(historical_amounts) / len(historical_amounts)
         max_amount = max(historical_amounts)
         variance = sum((x - avg_amount) ** 2 for x in historical_amounts) / len(historical_amounts)
@@ -231,20 +234,19 @@ class AMLControlEngine:
         if transaction_type != 'CREDIT':
             return {'triggered': False, 'risk_score': 0.0, 'description': 'Not an incoming transaction', 'metadata': {}}
         
-        total_transactions = db.query(Transaction).filter(Transaction.customer_id == customer_id).count()
-        
-        if total_transactions >= 7:
-            return {'triggered': False, 'risk_score': 0.0, 'description': 'Customer has sufficient transaction history', 'metadata': {}}
-        
         historical_transactions = db.query(Transaction).filter(and_(Transaction.customer_id == customer_id, Transaction.transaction_type == 'CREDIT')).all()
         
+        # Use the count of historical *incoming* transactions for the small profile check
+        if len(historical_transactions) >= 7:
+            return {'triggered': False, 'risk_score': 0.0, 'description': 'Customer has sufficient incoming transaction history', 'metadata': {}}
+
         if not historical_transactions:
             if amount > 10000:
                 logger.info(f"First transaction {amount} exceeds threshold 10000")
                 return {'triggered': True, 'risk_score': 0.8, 'description': f"First incoming transaction of {amount} exceeds new customer threshold", 'metadata': {'transaction_count': 0, 'threshold_applied': 10000}}
             return {'triggered': False, 'risk_score': 0.0, 'description': 'First transaction within acceptable range', 'metadata': {}}
         
-        historical_amounts = [t.base_amount for t in historical_transactions]
+        historical_amounts = [t.amount for t in historical_transactions]
         max_historical = max(historical_amounts)
         avg_historical = sum(historical_amounts) / len(historical_amounts)
         
@@ -257,14 +259,14 @@ class AMLControlEngine:
             risk_score = 0.75
             description = f"Transaction amount {amount} is {amount/max_historical:.1f}x the previous maximum of {max_historical}"
             logger.info(f"Small profile amount {amount} is > 2x max {max_historical}")
-        
+
         elif amount > avg_historical * 5:
             triggered = True
             risk_score = 0.65
             description = f"Transaction amount {amount} is {amount/avg_historical:.1f}x the historical average of {avg_historical:.2f}"
             logger.info(f"Small profile amount {amount} is > 5x avg {avg_historical}")
         
-        return {'triggered': triggered, 'risk_score': risk_score, 'description': description, 'metadata': {'transaction_count': total_transactions, 'historical_max': max_historical, 'current_amount': amount}}
+        return {'triggered': triggered, 'risk_score': risk_score, 'description': description, 'metadata': {'transaction_count': len(historical_transactions), 'historical_max': max_historical, 'current_amount': amount}}
 
     async def _control_unusual_outgoing_swift(self, transaction_data: Dict[str, Any], db: Session) -> Dict:
         """
@@ -290,22 +292,33 @@ class AMLControlEngine:
         if len(historical_swift) < 3:
             logger.info(f"Unusual SWIFT for established customer with little SWIFT history ({len(historical_swift)} transactions)")
             return {'triggered': True, 'risk_score': 0.7, 'description': f"Unusual SWIFT transaction - customer has no recent SWIFT history", 'metadata': {'historical_swift_count': len(historical_swift), 'amount': amount}}
-        
+
         historical_amounts = [t.base_amount for t in historical_swift]
         avg_amount = sum(historical_amounts) / len(historical_amounts)
-        max_amount = max(historical_amounts)
-        
+        max_amount = max(historical_amounts) # Define max_amount here
+        # Calculate standard deviation
+        variance = sum((x - avg_amount) ** 2 for x in historical_amounts) / len(historical_amounts)
+        std_dev = variance ** 0.5
+
         triggered = False
         risk_score = 0.0
         description = ""
-        
-        if amount > max_amount * 2:
+
+        # Rule 1: Amount significantly exceeds historical average (3 standard deviations)
+        if amount > avg_amount + (3 * std_dev):
             triggered = True
-            risk_score = 0.8
-            description = f"SWIFT amount {amount} exceeds 2x historical maximum {max_amount}"
+            risk_score = min(0.8, (amount - avg_amount) / max(1, avg_amount)) # Scale risk score based on deviation
+            description = f"Outgoing SWIFT transaction of {amount} significantly exceeds historical average ({avg_amount:.2f}) by 3 standard deviations."
+            logger.info(f"Unusual SWIFT amount detected: {amount} vs avg {avg_amount:.2f} (3-sigma rule)")
+
+        # Rule 2: Amount exceeds 2x historical maximum (existing rule, can be combined or kept separate)
+        if amount > max_amount * 2 and not triggered: # Only trigger if not already triggered by 3-sigma rule
+            triggered = True
+            risk_score = max(risk_score, 0.7) # Ensure risk score is at least 0.7
+            description = f"Outgoing SWIFT amount {amount} exceeds 2x historical maximum {max_amount}."
             logger.info(f"Unusual SWIFT amount {amount} > 2x max {max_amount}")
 
-        return {'triggered': triggered, 'risk_score': risk_score, 'description': description, 'metadata': {'avg_amount': avg_amount, 'max_amount': max_amount}}
+        return {'triggered': triggered, 'risk_score': risk_score, 'description': description, 'metadata': {'avg_amount': avg_amount, 'max_amount': max_amount, 'std_deviation': std_dev}}
 
     async def _control_small_profile_outgoing_swift(self, transaction_data: Dict[str, Any], db: Session) -> Dict:
         """
@@ -319,14 +332,55 @@ class AMLControlEngine:
         
         if transaction_type != 'DEBIT' or 'SWIFT' not in channel:
             return {'triggered': False, 'risk_score': 0.0, 'description': 'Not an outgoing SWIFT transaction', 'metadata': {}}
+
+        # Get historical outgoing SWIFT transactions for the customer
+        ninety_days_ago = datetime.now() - timedelta(days=90)
+        historical_outgoing_swift = db.query(Transaction).filter(
+            and_(
+                Transaction.customer_id == customer_id,
+                Transaction.transaction_type == 'DEBIT',
+                Transaction.channel.like('%SWIFT%'),
+                Transaction.created_at >= ninety_days_ago
+            )
+        ).all()
+
+        # Define "small profile" for outgoing SWIFT as less than 3 historical transactions
+        if len(historical_outgoing_swift) >= 3:
+            return {'triggered': False, 'risk_score': 0.0, 'description': 'Customer has sufficient outgoing SWIFT history for this control', 'metadata': {}}
+
+        triggered = False
+        risk_score = 0.0
+        description = ""
+
+        if not historical_outgoing_swift:
+            # First outgoing SWIFT transaction for this customer
+            if amount > 5000: # Threshold for first-time large SWIFT
+                triggered = True
+                risk_score = 0.9
+                description = f"First outgoing SWIFT transaction of {amount} exceeds new SWIFT customer threshold."
+                logger.info(f"Small profile: First SWIFT {amount} exceeds threshold 5000")
+        else:
+            # Customer has some (but few) historical outgoing SWIFT transactions
+            historical_amounts = [t.base_amount for t in historical_outgoing_swift]
+            max_historical_swift = max(historical_amounts)
+            avg_historical_swift = sum(historical_amounts) / len(historical_amounts)
+
+            # Flag if current amount is significantly higher than historical max or average
+            if amount > max_historical_swift * 2:
+                triggered = True
+                risk_score = 0.85
+                description = f"Outgoing SWIFT amount {amount} is {amount/max_historical_swift:.1f}x the previous maximum SWIFT of {max_historical_swift}."
+                logger.info(f"Small profile: SWIFT amount {amount} > 2x max {max_historical_swift}")
+            elif amount > avg_historical_swift * 3: # A bit more lenient than 5x for small profile
+                triggered = True
+                risk_score = 0.75
+                description = f"Outgoing SWIFT amount {amount} is {amount/avg_historical_swift:.1f}x the historical average SWIFT of {avg_historical_swift:.2f}."
+                logger.info(f"Small profile: SWIFT amount {amount} > 3x avg {avg_historical_swift}")
+
+        if triggered:
+            return {'triggered': triggered, 'risk_score': risk_score, 'description': description, 'metadata': {'historical_swift_count': len(historical_outgoing_swift), 'current_amount': amount}}
         
-        total_transactions = db.query(Transaction).filter(Transaction.customer_id == customer_id).count()
-        
-        if total_transactions >= 7:
-            return {'triggered': False, 'risk_score': 0.0, 'description': 'Customer has sufficient transaction history', 'metadata': {}}
-        
-        logger.info(f"Small profile customer ({total_transactions} transactions) attempting SWIFT")
-        return {'triggered': True, 'risk_score': 0.8, 'description': f"Small profile customer ({total_transactions} total transactions) attempting SWIFT transfer of {amount}", 'metadata': {'total_transactions': total_transactions, 'amount': amount}}
+        return {'triggered': False, 'risk_score': 0.0, 'description': '', 'metadata': {}}
 
     async def _control_cross_currency(self, transaction_data: Dict[str, Any], db: Session) -> Dict:
         """
@@ -363,4 +417,4 @@ class AMLControlEngine:
                 'metadata': {'matches': screening_result['matches']}
             }
         
-        return {'triggered': False, 'risk_score': 0.0, 'description': 'No sanctions match', 'metadata': {}}
+        return {'triggered': False, 'risk_score': 0.0, 'description': '', 'metadata': {}}

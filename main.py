@@ -773,14 +773,6 @@ async def reports_view(request: Request, current_user: User = Depends(get_curren
         return current_user
     return templates.TemplateResponse("reports.html", {"request": request, "user": current_user})
 
-
-
-
-
-
-
-
-
 # --- Customer Portal Frontend Routes ---
 
 @app.get("/portal/login", response_class=HTMLResponse)
@@ -1489,8 +1481,10 @@ async def simulate_normal_incoming_transactions(
     account_number: str = Form(...),
     amount: float = Form(...),
     count: int = Form(...),
+    run_aml_controls: bool = Form(False),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_dependency)
+    current_user: User = Depends(get_current_user_dependency),
+    background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     """Helper endpoint to simulate multiple normal incoming transactions for a customer."""
     customer = db.query(Customer).filter(Customer.customer_id == customer_id).first()
@@ -1523,6 +1517,21 @@ async def simulate_normal_incoming_transactions(
     db.commit()
     for t in transactions_created: # Refresh to get IDs
         db.refresh(t)
+
+    if run_aml_controls:
+        for t in transactions_created:
+            background_tasks.add_task(
+                process_transaction_controls,
+                t.id,
+                {
+                    "customer_id": t.customer_id,
+                    "base_amount": t.base_amount,
+                    "transaction_type": t.transaction_type,
+                    "channel": t.channel,
+                    "id": str(t.id)
+                },
+                manager
+            )
 
     logger.info(f"Simulated {count} normal incoming transactions for customer {customer_id}.")
     return {"message": f"Successfully simulated {count} normal incoming transactions.", "transaction_ids": [str(t.id) for t in transactions_created]}
@@ -1864,10 +1873,10 @@ async def get_dashboard_stats(db: Session = Depends(get_db), current_user: User 
     start_of_yesterday = datetime.combine(yesterday, datetime.min.time())
 
     # Calculate current KPI values (counting all for now to ensure non-zero display if data exists)
-    today_transactions = db.query(Transaction).count() or 0 # Count all transactions
-    open_alerts = db.query(Alert).count() or 0 # Count all alerts
-    high_risk_alerts = db.query(Alert).count() or 0 # Count all alerts
-    cases_opened_today = db.query(Case).count() or 0 # Count all cases
+    today_transactions = db.query(Transaction).filter(Transaction.created_at >= start_of_day).count() or 0
+    open_alerts = db.query(Alert).filter(Alert.status == AlertStatus.OPEN).count() or 0
+    high_risk_alerts = db.query(Alert).filter(Alert.risk_score >= 0.7).count() or 0
+    cases_opened_today = db.query(Case).filter(Case.created_at >= start_of_day).count() or 0
 
     # Calculate yesterday's values for change percentages (these remain specific to yesterday's data)
     yesterday_transactions = db.query(Transaction).filter(Transaction.created_at >= start_of_yesterday, Transaction.created_at < start_of_day).count() or 0
@@ -1936,30 +1945,96 @@ async def get_aml_control_summary(db: Session = Depends(get_db), current_user: U
     return [{"control_type": s.alert_type, "triggered_count": s.triggered_count, "average_risk_score": s.average_risk_score} for s in summary]
 
 @app.get("/api/reports/charts-data")
-async def get_charts_data(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
+async def get_charts_data(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+    filters: ReportFilters = Depends(get_report_filters),
+):
     if isinstance(current_user, RedirectResponse):
         return current_user
 
+    transaction_query = db.query(Transaction)
+    alert_query = db.query(Alert)
+    customer_query = db.query(Customer)
+
+    if filters:
+        transaction_query = apply_report_filters(transaction_query, filters, db)
+        alert_query = apply_report_filters(alert_query.join(Transaction), filters, db)
+        # customer_query is not filtered by date, risk, or currency in apply_report_filters, so it's fine as is.
+
+    # Volume Trends
     thirty_days_ago = datetime.now().date() - timedelta(days=30)
-    volume_trends_data = db.query(
+    volume_trends_data = transaction_query.with_entities(
         func.date(Transaction.created_at).label("date"),
-        func.sum(Transaction.amount).label("total_volume")
-    ).filter(Transaction.created_at >= thirty_days_ago).group_by(func.date(Transaction.created_at)).all()
+        func.sum(Transaction.base_amount).label("total_volume"),
+        func.sum(case((Transaction.risk_score >= 0.7, Transaction.base_amount), else_=0)).label("high_risk_volume")
+    ).filter(Transaction.created_at >= thirty_days_ago).group_by(func.date(Transaction.created_at)).order_by(func.date(Transaction.created_at)).all()
 
     volume_trends = {
-        "labels": [(thirty_days_ago + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(31)],
-        "total_volume": [0] * 31
+        "labels": [str(row[0]) for row in volume_trends_data],
+        "total_volume": [row[1] for row in volume_trends_data],
+        "high_risk_volume": [row[2] for row in volume_trends_data]
     }
 
-    for d in volume_trends_data:
-        try:
-            idx = (d.date - thirty_days_ago).days
-            volume_trends["total_volume"][idx] = d.total_volume
-        except (IndexError, AttributeError):
-            pass
+    # Alert Distribution
+    alert_distribution_data = alert_query.with_entities(
+        Alert.alert_type,
+        func.count(Alert.id)
+    ).group_by(Alert.alert_type).all()
+
+    alert_distribution = {
+        "labels": [row[0] for row in alert_distribution_data],
+        "data": [row[1] for row in alert_distribution_data]
+    }
+
+    # Risk Trends
+    risk_trends_data = alert_query.with_entities(
+        func.date(Alert.created_at),
+        func.sum(case((Alert.risk_score >= 0.9, 1), else_=0)), # Critical
+        func.sum(case((Alert.risk_score >= 0.7, 1), else_=0)), # High
+        func.sum(case((Alert.risk_score >= 0.4, 1), else_=0))  # Medium
+    ).group_by(func.date(Alert.created_at)).order_by(func.date(Alert.created_at)).all()
+
+    risk_trends = {
+        "labels": [str(row[0]) for row in risk_trends_data],
+        "critical": [row[1] for row in risk_trends_data],
+        "high": [row[2] for row in risk_trends_data],
+        "medium": [row[3] for row in risk_trends_data]
+    }
+
+    # Channel Analysis
+    channel_analysis_data = transaction_query.with_entities(
+        Transaction.channel,
+        func.count(Transaction.id)
+    ).group_by(Transaction.channel).all()
+
+    channel_analysis = {
+        "labels": [row[0] for row in channel_analysis_data],
+        "data": [row[1] for row in channel_analysis_data]
+    }
+
+    # Customer Risk
+    customer_risk_data_raw = customer_query.with_entities(
+        Customer.risk_rating,
+        func.count(Customer.id)
+    ).group_by(Customer.risk_rating).all()
+
+    customer_risk_counts = {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "CRITICAL": 0}
+    for rating, count in customer_risk_data_raw:
+        if rating:
+            customer_risk_counts[rating.value] = count
+
+    customer_risk = {
+        "labels": ["Low Risk", "Medium Risk", "High Risk", "Critical Risk"],
+        "data": [customer_risk_counts["LOW"], customer_risk_counts["MEDIUM"], customer_risk_counts["HIGH"], customer_risk_counts["CRITICAL"]]
+    }
 
     return {
-        "volume_trends": volume_trends
+        "volume_trends": volume_trends,
+        "alert_distribution": alert_distribution,
+        "risk_trends": risk_trends,
+        "channel_analysis": channel_analysis,
+        "customer_risk": customer_risk
     }
 
 @app.get("/api/monitoring/transactions/recent")
@@ -2613,6 +2688,33 @@ async def get_cases(
         )
         for case in cases
     ]
+
+@app.post("/api/cases/", response_model=CaseResponse)
+async def create_case_api(
+    case_request: CreateCaseRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency)
+):
+    if isinstance(current_user, RedirectResponse):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    try:
+        new_case = await case_service.create_case(
+            db=db,
+            alert_id=case_request.alert_id,
+            title=case_request.title,
+            description=case_request.description,
+            priority=case_request.priority,
+            assigned_to=case_request.assigned_to,
+            investigation_notes=case_request.investigation_notes,
+            target_completion_date=case_request.target_completion_date
+        )
+        return new_case
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error creating case via API: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create case")
 
 @app.get("/api/cases/{case_id}")
 async def get_case(case_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
