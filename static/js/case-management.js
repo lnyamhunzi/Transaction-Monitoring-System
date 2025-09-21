@@ -7,7 +7,6 @@ class CaseManagement {
         this.casesTable = null;
         this.currentCaseId = null;
         this.users = []; // To store users for assignment dropdowns
-        this.init();
     }
 
     getAuthHeaders() {
@@ -736,4 +735,5 @@ class CaseManagement {
 // Initialize case management when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
     window.caseManagement = new CaseManagement();
+    window.caseManagement.init();
 });

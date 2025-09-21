@@ -9,27 +9,27 @@
 <!-- Dashboard Metrics -->
 <div class="metrics-grid">
     <div class="metric-card">
-        <div class="metric-value" id="today-transactions">0</div>
+        <div class="metric-value" id="today-transactions">{{ today_transactions }}</div>
         <div class="metric-label">Today's Transactions</div>
-        <div class="metric-change change-positive" id="transactions-change">+12%</div>
+        <div class="metric-change change-positive" id="transactions-change">{{ transactions_change }}%</div>
     </div>
     
     <div class="metric-card">
-        <div class="metric-value" id="open-alerts">0</div>
+        <div class="metric-value" id="open-alerts">{{ open_alerts }}</div>
         <div class="metric-label">Open Alerts</div>
-        <div class="metric-change change-negative" id="alerts-change">-5%</div>
+        <div class="metric-change change-negative" id="alerts-change">{{ alerts_change }}%</div>
     </div>
     
     <div class="metric-card">
-        <div class="metric-value" id="high-risk-alerts">0</div>
+        <div class="metric-value" id="high-risk-alerts">{{ high_risk_alerts }}</div>
         <div class="metric-label">High Risk Alerts</div>
-        <div class="metric-change change-positive" id="high-risk-change">+8%</div>
+        <div class="metric-change change-positive" id="high-risk-change">N/A</div>
     </div>
     
     <div class="metric-card">
-        <div class="metric-value" id="cases-opened-today">0</div>
+        <div class="metric-value" id="cases-opened-today">{{ cases_opened_today }}</div>
         <div class="metric-label">Cases Opened Today</div>
-        <div class="metric-change change-positive" id="cases-change">+3</div>
+        <div class="metric-change change-positive" id="cases-change">{{ cases_change }}</div>
     </div>
 </div>
 

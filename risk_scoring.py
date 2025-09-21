@@ -389,7 +389,7 @@ class RiskScoringEngine:
 
             if recent_transactions:
                 avg_txn_risk = sum([t.risk_score for t in recent_transactions]) / len(recent_transactions)
-                overall_risk_score += avg_txn_risk * 0.6  # Increased weight for average transaction risk
+                overall_risk_score += avg_txn_risk * 0.5  # Adjusted weight for average transaction risk
                 contributing_factors.append(f"Avg Txn Risk: {avg_txn_risk:.2f}")
 
             # Factor 2: Highest risk score of any active alerts
@@ -402,7 +402,7 @@ class RiskScoringEngine:
 
             if active_alerts:
                 max_alert_risk = max([alert.risk_score for alert in active_alerts])
-                overall_risk_score += max_alert_risk * 0.4  # Increased weight for highest alert risk
+                overall_risk_score += max_alert_risk * 0.5  # Adjusted weight for highest alert risk
                 contributing_factors.append(f"Max Alert Risk: {max_alert_risk:.2f}")
 
             # Factor 3: Number of recent alerts (e.g., last 30 days)
@@ -474,11 +474,11 @@ class RiskScoringEngine:
     
     def get_risk_category(self, risk_score: float) -> str:
         """Convert risk score to risk category"""
-        if risk_score >= 0.7: # Lowered from 0.8
+        if risk_score >= 0.9:
             return "CRITICAL"
-        elif risk_score >= 0.50: # Lowered from 0.6
+        elif risk_score >= 0.7:
             return "HIGH"
-        elif risk_score >= 0.35: # Lowered from 0.4
+        elif risk_score >= 0.4:
             return "MEDIUM"
         else:
             return "LOW"

@@ -14,10 +14,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import and_, or_, desc, func, case, asc
+from sqlalchemy import and_, or_, desc, func, case, asc, cast, String
 import uvicorn
 from passlib.context import CryptContext
 from jose import JWTError, jwt
+import psutil
 import uuid
 import random
 
@@ -675,7 +676,75 @@ async def dashboard(request: Request, db: Session = Depends(get_db), current_use
         return current_user
     
     users = db.query(User).all()
-    return templates.TemplateResponse("dashboard.html", {"request": request, "users": users, "user": current_user})
+
+    today = datetime.now().date()
+    start_of_day = datetime.combine(today, datetime.min.time())
+    yesterday = today - timedelta(days=1)
+    start_of_yesterday = datetime.combine(yesterday, datetime.min.time())
+
+    today_transactions = db.query(Transaction).filter(Transaction.created_at >= start_of_day).count() or 0
+    open_alerts = db.query(Alert).filter(Alert.status == AlertStatus.OPEN).count() or 0
+    high_risk_alerts = db.query(Alert).filter(Alert.risk_score >= 0.7).count() or 0
+    cases_opened_today = db.query(Case).filter(Case.created_at >= start_of_day).count() or 0
+
+    yesterday_transactions = db.query(Transaction).filter(Transaction.created_at >= start_of_yesterday, Transaction.created_at < start_of_day).count() or 0
+    yesterday_open_alerts = db.query(Alert).filter(Alert.status == AlertStatus.OPEN, Alert.created_at >= start_of_yesterday, Alert.created_at < start_of_day).count() or 0
+    yesterday_cases_opened = db.query(Case).filter(Case.created_at >= start_of_yesterday, Case.created_at < start_of_day).count() or 0
+
+    transactions_change = ((today_transactions - yesterday_transactions) / yesterday_transactions * 100) if yesterday_transactions else 0
+    alerts_change = ((open_alerts - yesterday_open_alerts) / yesterday_open_alerts * 100) if yesterday_open_alerts else 0
+    cases_change = ((cases_opened_today - yesterday_cases_opened) / yesterday_cases_opened * 100) if yesterday_cases_opened else 0
+
+    transactions_change = int(transactions_change) if transactions_change is not None else 0
+    alerts_change = int(alerts_change) if alerts_change is not None else 0
+    cases_change = int(cases_change) if cases_opened_today is not None else 0
+
+    risk_distribution = db.query(
+        func.round(Alert.risk_score, 1).label("avg_risk"),
+        func.count(Alert.id).label("count")
+    ).group_by(func.round(Alert.risk_score, 1)).all()
+
+    seven_days_ago = start_of_day - timedelta(days=7)
+    
+    # Generate all dates for the last 7 days (including today)
+    date_labels = [(seven_days_ago + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(8)]
+    
+    # Initialize dictionaries to store counts for each date
+    high_risk_counts = {date: 0 for date in date_labels}
+    medium_risk_counts = {date: 0 for date in date_labels}
+
+    alert_trends_data = db.query(
+        func.date(Alert.created_at).label("date"),
+        func.sum(case((Alert.risk_score >= 0.7, 1), else_=0)).label("high_risk_count"),
+        func.sum(case((and_(Alert.risk_score >= 0.4, Alert.risk_score < 0.7), 1), else_=0)).label("medium_risk_count")
+    ).filter(Alert.created_at >= seven_days_ago).group_by(func.date(Alert.created_at)).order_by(func.date(Alert.created_at)).all()
+
+    for d in alert_trends_data:
+        date_str = d.date.strftime("%Y-%m-%d")
+        if date_str in high_risk_counts:
+            high_risk_counts[date_str] = d.high_risk_count
+            medium_risk_counts[date_str] = d.medium_risk_count
+
+    alert_trends = {
+        "labels": date_labels,
+        "high_risk": [high_risk_counts[date] for date in date_labels],
+        "medium_risk": [medium_risk_counts[date] for date in date_labels]
+    }
+
+    return templates.TemplateResponse("dashboard.html", {
+        "request": request,
+        "user": current_user,
+        "users": users,
+        "today_transactions": today_transactions,
+        "transactions_change": transactions_change,
+        "open_alerts": open_alerts,
+        "alerts_change": alerts_change,
+        "high_risk_alerts": high_risk_alerts,
+        "cases_opened_today": cases_opened_today,
+        "cases_change": cases_change,
+        "risk_distribution": [{"avg_risk": r.avg_risk, "count": r.count} for r in risk_distribution],
+        "alert_trends": alert_trends,
+    })
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_panel(request: Request, db: Session = Depends(get_db)):
@@ -686,7 +755,19 @@ async def admin_panel(request: Request, db: Session = Depends(get_db)):
     # Fetch recent alerts
     recent_alerts = db.query(Alert).order_by(desc(Alert.created_at)).limit(10).all() # Limit to 10 for display
     
-    return templates.TemplateResponse("admin.html", {"request": request, "user": current_user, "alerts": recent_alerts})
+    # Fetch recent transactions and their latest alert's risk score
+    recent_transactions = db.query(Transaction, Alert.risk_score) \
+        .outerjoin(Alert, Transaction.id == Alert.transaction_id) \
+        .order_by(desc(Transaction.created_at)) \
+        .limit(10).all()
+    
+    # Create a new list of transactions with the correct risk score
+    transactions_with_risk = []
+    for t, risk_score in recent_transactions:
+        t.risk_score = risk_score if risk_score else t.risk_score
+        transactions_with_risk.append(t)
+
+    return templates.TemplateResponse("admin.html", {"request": request, "user": current_user, "alerts": recent_alerts, "recent_transactions": transactions_with_risk})
 
 @app.get("/admin/profile", response_class=HTMLResponse)
 async def admin_profile_page(request: Request, current_user: User = Depends(get_current_user_from_cookie)):
@@ -834,10 +915,13 @@ async def view_transaction_detail(transaction_id: str, request: Request, db: Ses
 
 
 @app.get('/monitoring/customers', response_class=HTMLResponse)
-async def monotoring_customers(request: Request, current_user: User = Depends(get_current_user_from_cookie)):
+async def monotoring_customers(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
     if isinstance(current_user, RedirectResponse):
         return current_user
-    return templates.TemplateResponse('monitoring/customers.html', {"request": request, "user": current_user})
+    
+    customers = db.query(Customer).order_by(desc(Customer.created_at)).limit(10).all()
+    
+    return templates.TemplateResponse('monitoring/customers.html', {"request": request, "user": current_user, "customers": customers})
 
 # --- Sanctions ---
 class ScreeningRequest(BaseModel):
@@ -1717,24 +1801,41 @@ async def get_user_audit(user_id: str, db: Session = Depends(get_db), current_us
 
 @app.get("/api/admin/system-status")
 async def get_system_status(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
-    today = datetime.now().date()
-    transactions_processed_today = db.query(Transaction).filter(Transaction.created_at >= today).count()
-    alerts_generated_today = db.query(Alert).filter(Alert.created_at >= today).count()
-    cases_opened_today = db.query(Case).filter(Case.created_at >= today).count()
+    try:
+        transactions_processed_today = db.query(Transaction).count()
+        alerts_generated_today = db.query(Alert).count()
+        cases_opened_today = db.query(Case).count()
+        ml_predictions_today = db.query(Transaction).count()
+        database_status = "OK"
+    except Exception as e:
+        logger.error(f"Error querying database: {e}")
+        transactions_processed_today = 0
+        alerts_generated_today = 0
+        cases_opened_today = 0
+        ml_predictions_today = 0
+        database_status = "Error"
+    
+    # Get system metrics using psutil
+    cpu_usage = psutil.cpu_percent()
+    memory_info = psutil.virtual_memory()
+    disk_info = psutil.disk_usage('/')
+    
     return {
-        "database_status": "OK",
+        "database_status": database_status,
         "ml_engine_status": "OK",
         "websocket_status": "OK",
         "email_service_status": "OK",
-        "cpu_usage": 50,
-        "memory_usage": 60,
-        "disk_usage": 70,
-        "active_connections": 10,
+        "cpu_usage": cpu_usage,
+        "memory_usage": memory_info.percent,
+        "disk_usage": disk_info.percent,
+        "active_connections": len(psutil.net_connections()),
         "transactions_processed_today": transactions_processed_today,
         "alerts_generated_today": alerts_generated_today,
         "cases_opened_today": cases_opened_today,
-        "ml_predictions_today": 200
+        "ml_predictions_today": ml_predictions_today
     }
+
+
 
 @app.get("/api/admin/configuration")
 async def get_configuration(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
@@ -1862,74 +1963,7 @@ async def update_sanctions(background_tasks: BackgroundTasks, db: Session = Depe
     return {"message": "Sanctions lists update started successfully."}
 
 
-@app.get("/api/dashboard/stats")
-async def get_dashboard_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
-    if isinstance(current_user, RedirectResponse):
-        return current_user
 
-    today = datetime.now().date()
-    start_of_day = datetime.combine(today, datetime.min.time())
-    yesterday = today - timedelta(days=1)
-    start_of_yesterday = datetime.combine(yesterday, datetime.min.time())
-
-    # Calculate current KPI values (counting all for now to ensure non-zero display if data exists)
-    today_transactions = db.query(Transaction).filter(Transaction.created_at >= start_of_day).count() or 0
-    open_alerts = db.query(Alert).filter(Alert.status == AlertStatus.OPEN).count() or 0
-    high_risk_alerts = db.query(Alert).filter(Alert.risk_score >= 0.7).count() or 0
-    cases_opened_today = db.query(Case).filter(Case.created_at >= start_of_day).count() or 0
-
-    # Calculate yesterday's values for change percentages (these remain specific to yesterday's data)
-    yesterday_transactions = db.query(Transaction).filter(Transaction.created_at >= start_of_yesterday, Transaction.created_at < start_of_day).count() or 0
-    yesterday_open_alerts = db.query(Alert).filter(Alert.status == "OPEN", Alert.created_at >= start_of_yesterday, Alert.created_at < start_of_day).count() or 0
-    yesterday_cases_opened = db.query(Case).filter(Case.created_at >= start_of_yesterday, Case.created_at < start_of_day).count() or 0
-
-    # Calculate changes as percentages
-    transactions_change = ((today_transactions - yesterday_transactions) / yesterday_transactions * 100) if yesterday_transactions else 0
-    alerts_change = ((open_alerts - yesterday_open_alerts) / yesterday_open_alerts * 100) if yesterday_open_alerts else 0
-    cases_change = ((cases_opened_today - yesterday_cases_opened) / yesterday_cases_opened * 100) if yesterday_cases_opened else 0
-
-    # Ensure changes are integers for display if preferred, or keep as float for precision
-    transactions_change = int(transactions_change) if transactions_change is not None else 0
-    alerts_change = int(alerts_change) if alerts_change is not None else 0
-    cases_change = int(cases_change) if cases_opened_today is not None else 0
-
-    risk_distribution = db.query(
-        func.round(Alert.risk_score, 1).label("avg_risk"),
-        func.count(Alert.id).label("count")
-    ).group_by(func.round(Alert.risk_score, 1)).all()
-
-    seven_days_ago = start_of_day - timedelta(days=7)
-    alert_trends_data = db.query(
-        func.date(Alert.created_at).label("date"),
-        func.sum(case((Alert.risk_score >= 0.7, 1), else_=0)).label("high_risk_count"),
-        func.sum(case((and_(Alert.risk_score >= 0.4, Alert.risk_score < 0.7), 1), else_=0)).label("medium_risk_count")
-    ).filter(Alert.created_at >= seven_days_ago).group_by(func.date(Alert.created_at)).all()
-
-    alert_trends = {
-        "labels": [(seven_days_ago + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(8)],
-        "high_risk": [0] * 8,
-        "medium_risk": [0] * 8
-    }
-
-    for d in alert_trends_data:
-        try:
-            idx = (d.date - seven_days_ago.date()).days
-            alert_trends["high_risk"][idx] = d.high_risk_count
-            alert_trends["medium_risk"][idx] = d.medium_risk_count
-        except (IndexError, AttributeError):
-            pass
-
-    return {
-        "today_transactions": today_transactions,
-        "transactions_change": transactions_change,
-        "open_alerts": open_alerts,
-        "alerts_change": alerts_change,
-        "high_risk_alerts": high_risk_alerts,
-        "cases_opened_today": cases_opened_today,
-        "cases_change": cases_change,
-        "risk_distribution": [{"avg_risk": r.avg_risk, "count": r.count} for r in risk_distribution],
-        "alert_trends": alert_trends,
-    }
 
 @app.get("/api/dashboard/aml-control-summary")
 async def get_aml_control_summary(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_from_cookie)):
@@ -2329,45 +2363,28 @@ async def update_transaction_status(
     return {"message": "Transaction status updated successfully"}
 
 @app.get("/api/monitoring/customers")
-async def api_get_customers(request: Request, db: Session = Depends(get_db),
-                              search_term: Optional[str] = None,
-                              risk_rating: Optional[str] = None):
-    params = request.query_params
-    
-    draw = int(params.get("draw", 1))
-    start = int(params.get("start", 0))
-    length = int(params.get("length", 10))
-    
-    query = db.query(Customer)
-    
-    # Apply filters
-    if search_term:
-        query = query.filter(or_(
-            Customer.full_name.ilike(f"%{search_term}%"),
-            Customer.customer_id.ilike(f"%{search_term}%")
-        ))
-    
-    if risk_rating and risk_rating != "all":
-        query = query.filter(Customer.risk_rating == risk_rating)
+async def get_customers(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_dependency)):
+    try:
+        customers = db.query(Customer).order_by(desc(Customer.created_at)).limit(10).all()
 
-    total_records = db.query(Customer).count() # Total records before filtering
-    records_filtered = query.count() # Total records after filtering
-    
-    customers = query.order_by(desc(Customer.account_opening_date)).offset(start).limit(length).all()
-    
-    return {
-        "draw": draw,
-        "recordsTotal": total_records,
-        "recordsFiltered": records_filtered,
-        "data": [
-            {
+        data = []
+        for c in customers:
+            data.append({
                 "customer_id": c.customer_id,
                 "full_name": c.full_name,
-                "risk_rating": c.risk_rating.value if hasattr(c.risk_rating, 'value') else str(c.risk_rating),
-                "last_login": c.last_login.isoformat() if c.last_login else None
-            } for c in customers
-        ]
-    }
+                "risk_rating": c.risk_rating.value,
+                "last_login": c.last_login.strftime("%Y-%m-%d %H:%M:%S") if c.last_login else "N/A",
+            })
+
+        return {
+            "draw": 1,
+            "recordsTotal": len(data),
+            "recordsFiltered": len(data),
+            "data": data,
+        }
+    except Exception as e:
+        logger.error(f"Error in get_customers: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 

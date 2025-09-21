@@ -28,28 +28,65 @@ class AMLDashboard {
                 critical: 0.9
             }
         };
-        
-        this.init();
     }
     
     /**
      * Initialize the dashboard
      */
-    async init() {
-        console.log('Initializing AML Dashboard...');
-        
+    async initializeDashboard() {
         try {
-            await this.setupWebSocket();
-            await this.initializeCharts();
-            await this.initTransactionsTable();
-            await this.loadInitialData();
-            await this.setupEventListeners();
-            await this.startPeriodicRefresh();
+            this.showLoading(true);
+            const headers = await this.getAuthHeaders();
+            if (!headers) {
+                return;
+            }
+
+            // Load dashboard statistics
+            const statsResponse = await fetch('/api/dashboard/stats', { headers });
+            if (statsResponse.status === 401) { window.location.href = '/admin/login'; return; }
+            if (!statsResponse.ok) {
+                const errorText = await statsResponse.text();
+                throw new Error(`Failed to load dashboard statistics: ${statsResponse.status} - ${errorText}`);
+            }
+            const stats = await statsResponse.json();
+            if (!stats) {
+                console.error('Received null or empty stats from /api/dashboard/stats');
+                this.showError('Failed to load dashboard statistics: No data received.');
+                return;
+            }
             
-            console.log('Dashboard initialized successfully');
+            this.updateDashboardStats(stats);
+            
+            // Load AML Control Summary
+            const amlSummaryResponse = await fetch('/api/dashboard/aml-control-summary', { headers });
+            if (amlSummaryResponse.status === 401) { window.location.href = '/admin/login'; return; }
+            if (!amlSummaryResponse.ok) {
+                const errorText = await amlSummaryResponse.text();
+                throw new Error(`Failed to load AML control summary: ${amlSummaryResponse.status} - ${errorText}`);
+            }
+            const amlSummary = await amlSummaryResponse.json();
+            this.updateAmlControlSummary(amlSummary);
+
+            // Load charts data
+            const chartsDataResponse = await fetch('/api/reports/charts-data', { headers });
+            if (chartsDataResponse.status === 401) { window.location.href = '/admin/login'; return; }
+            if (!chartsDataResponse.ok) {
+                const errorText = await chartsDataResponse.text();
+                throw new Error(`Failed to load charts data: ${chartsDataResponse.status} - ${errorText}`);
+            }
+            const chartsData = await chartsDataResponse.json();
+            this.updateTransactionVolumeChartData(chartsData.volume_trends);
+            
+            // Load recent alerts
+            this.loadAlerts();
+
+            // transactions are loaded by datatables ajax
+            
         } catch (error) {
-            console.error('Error initializing dashboard:', error);
-            this.showError('Failed to initialize dashboard');
+            console.error('Error loading initial data:', error);
+            this.showError('Failed to load dashboard data');
+        } finally {
+            this.showLoading(false);
         }
     }
     
@@ -138,62 +175,7 @@ class AMLDashboard {
     /**
      * Load initial dashboard data
      */
-    async loadInitialData() {
-        try {
-            this.showLoading(true);
-            const headers = await this.getAuthHeaders();
-            if (!headers) {
-                return;
-            }
 
-            // Load dashboard statistics
-            const statsResponse = await fetch('/api/dashboard/stats', { headers });
-            if (statsResponse.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!statsResponse.ok) {
-                const errorText = await statsResponse.text();
-                throw new Error(`Failed to load dashboard statistics: ${statsResponse.status} - ${errorText}`);
-            }
-            const stats = await statsResponse.json();
-            if (!stats) {
-                console.error('Received null or empty stats from /api/dashboard/stats');
-                this.showError('Failed to load dashboard statistics: No data received.');
-                return;
-            }
-            
-            this.updateDashboardStats(stats);
-            
-            // Load AML Control Summary
-            const amlSummaryResponse = await fetch('/api/dashboard/aml-control-summary', { headers });
-            if (amlSummaryResponse.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!amlSummaryResponse.ok) {
-                const errorText = await amlSummaryResponse.text();
-                throw new Error(`Failed to load AML control summary: ${amlSummaryResponse.status} - ${errorText}`);
-            }
-            const amlSummary = await amlSummaryResponse.json();
-            this.updateAmlControlSummary(amlSummary);
-
-            // Load charts data
-            const chartsDataResponse = await fetch('/api/reports/charts-data', { headers });
-            if (chartsDataResponse.status === 401) { window.location.href = '/admin/login'; return; }
-            if (!chartsDataResponse.ok) {
-                const errorText = await chartsDataResponse.text();
-                throw new Error(`Failed to load charts data: ${chartsDataResponse.status} - ${errorText}`);
-            }
-            const chartsData = await chartsDataResponse.json();
-            this.updateTransactionVolumeChartData(chartsData.volume_trends);
-            
-            // Load recent alerts
-            this.loadAlerts();
-
-            // transactions are loaded by datatables ajax
-            
-        } catch (error) {
-            console.error('Error loading initial data:', error);
-            this.showError('Failed to load dashboard data');
-        } finally {
-            this.showLoading(false);
-        }
-    }
 
     async loadAlerts(queryString = '') {
         try {
@@ -254,7 +236,7 @@ class AMLDashboard {
             this.updateMetricCard('today-transactions', stats.today_transactions || 5, stats.transactions_change);
             this.updateMetricCard('open-alerts', stats.open_alerts || 0, stats.alerts_change);
             this.updateMetricCard('high-risk-alerts', stats.high_risk_alerts || 0); // No specific change for high-risk alerts in backend
-            this.updateMetricCard('cases-opened-today', stats.cases_opened_today || 0, stats.cases_change); // New metric card
+            this.updateMetricCard('cases-opened-today', stats.cases_opened_today || 0, stats.cases_change);
 
             // Update risk distribution chart
             if (this.charts.riskDistribution && stats.risk_distribution) {
@@ -397,7 +379,17 @@ class AMLDashboard {
      */
     async initAlertTrendsChart() {
         const ctx = document.getElementById('alertTrendsChart');
-        if (!ctx) return;
+        if (!ctx) {
+            console.error('Canvas element #alertTrendsChart not found.');
+            return;
+        }
+        console.log('Initializing Alert Trends Chart...');
+        
+        // Calculate min and max dates for the last 7 days
+        const today = new Date();
+        today.setHours(0, 0, 0, 0); // Set to start of today
+        const sevenDaysAgo = new Date(today);
+        sevenDaysAgo.setDate(today.getDate() - 7);
         
         this.charts.alertTrends = new Chart(ctx, {
             type: 'line',
@@ -435,9 +427,19 @@ class AMLDashboard {
                         }
                     },
                     x: {
+                        type: 'time',
+                        time: {
+                            unit: 'day',
+                            tooltipFormat: 'MMM D',
+                            displayFormats: {
+                                day: 'MMM D'
+                            }
+                        },
+                        min: sevenDaysAgo.toISOString().split('T')[0], // Set min date
+                        max: today.toISOString().split('T')[0], // Set max date
                         title: {
                             display: true,
-                            text: 'Time'
+                            text: 'Date'
                         }
                     }
                 },
@@ -448,6 +450,26 @@ class AMLDashboard {
                 }
             }
         });
+        console.log('Alert Trends Chart initialized.', this.charts.alertTrends);
+    }
+    
+    /**
+     * Update alert trends chart
+     */
+    updateAlertTrends(alertTrends) {
+        if (!this.charts.alertTrends) {
+            console.warn('Alert Trends Chart instance not found, cannot update.');
+            return;
+        }
+        console.log('Updating Alert Trends Chart with data:', alertTrends);
+        const chart = this.charts.alertTrends;
+        if (alertTrends) {
+            chart.data.labels = alertTrends.labels;
+            chart.data.datasets[0].data = alertTrends.high_risk;
+            chart.data.datasets[1].data = alertTrends.medium_risk;
+            chart.update('active');
+            console.log('Alert Trends Chart updated.');
+        }
     }
     
     /**
@@ -1030,6 +1052,12 @@ class AMLDashboard {
 }
 
 // Initialize dashboard when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     window.amlDashboard = new AMLDashboard();
+    await window.amlDashboard.initializeCharts(); // Initialize charts first
+    await window.amlDashboard.initializeDashboard();
+    await window.amlDashboard.initTransactionsTable(); // Initialize transactions table
+    window.amlDashboard.setupEventListeners();
+    window.amlDashboard.setupWebSocket();
+    window.amlDashboard.startPeriodicRefresh();
 });

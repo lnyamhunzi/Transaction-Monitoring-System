@@ -16,6 +16,7 @@
             <p><strong>Type:</strong> {{ transaction.transaction_type }}</p>
             <p><strong>Channel:</strong> {{ transaction.channel }}</p>
             <p><strong>Status:</strong> {{ transaction.status }}</p>
+            <p><strong>Risk Score:</strong> <span class="badge bg-{{ transaction.risk_score | risklevel }}">{{ transaction.risk_score }}</span></p>
             <p><strong>Date:</strong> {{ transaction.created_at }}</p>
             <p><strong>Narrative:</strong> {{ transaction.narrative }}</p>
             <!-- Add more transaction details as needed -->

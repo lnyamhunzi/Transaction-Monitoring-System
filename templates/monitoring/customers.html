@@ -36,6 +36,15 @@
                 </tr>
             </thead>
             <tbody>
+                {% for c in customers %}
+                <tr>
+                    <td>{{ c.customer_id }}</td>
+                    <td>{{ c.full_name }}</td>
+                    <td><span class="badge bg-{{ c.risk_rating.value.lower() }}">{{ c.risk_rating.value }}</span></td>
+                    <td>{{ c.last_login.strftime('%Y-%m-%d %H:%M:%S') if c.last_login else 'N/A' }}</td>
+                    <td><a href="/customers/{{ c.customer_id }}/profile" class="btn btn-sm btn-outline-primary">View Profile</a></td>
+                </tr>
+                {% endfor %}
             </tbody>
         </table>
     </div>
@@ -45,49 +54,7 @@
 {% block extra_scripts %}
 <script>
 $(document).ready(function() {
-    var customersTable = $('#customersMonitoringTable').DataTable({
-        "processing": true,
-        "serverSide": true,
-        "ajax": {
-            "url": "/api/monitoring/customers",
-            "type": "GET",
-            "data": function (d) {
-                d.search_term = $('#customerSearchInput').val();
-                d.risk_rating = $('#customerRiskRatingFilter').val();
-            }
-        },
-        "columns": [
-            { "data": "customer_id" },
-            { "data": "full_name" },
-            { 
-                "data": "risk_rating",
-                "render": function ( data, type, row ) {
-                    let badgeClass = "bg-secondary";
-                    if (data === "LOW") badgeClass = "bg-success";
-                    else if (data === "MEDIUM") badgeClass = "bg-warning";
-                    else if (data === "HIGH") badgeClass = "bg-danger";
-                    else if (data === "CRITICAL") badgeClass = "bg-dark";
-                    return `<span class="badge ${badgeClass}">${data}</span>`;
-                }
-            },
-            { 
-                "data": "last_login",
-                "render": function ( data, type, row ) {
-                    return data ? new Date(data).toLocaleString() : 'N/A';
-                }
-            },
-            {
-                "data": "customer_id",
-                "render": function ( data, type, row ) {
-                    return `<a href="/customers/${data}/profile" class="btn btn-sm btn-outline-primary">View Profile</a>`;
-                }
-            }
-        ]
-    });
-
-    $('#applyCustomerFiltersBtn').on('click', function() {
-        customersTable.ajax.reload();
-    });
+    $('#customersMonitoringTable').DataTable();
 });
 </script>
 {% endblock %}

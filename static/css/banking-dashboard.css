@@ -325,6 +325,9 @@ h6 { font-size: 1rem; }
 .status-high { background-color: rgba(220, 53, 69, 0.15); color: #721c24; }
 .status-medium { background-color: rgba(255, 193, 7, 0.15); color: #856404; }
 .status-low { background-color: rgba(40, 167, 69, 0.15); color: #155724; }
+.status-flagged { background-color: rgba(220, 53, 69, 0.15); color: #721c24; }
+.status-completed { background-color: rgba(40, 167, 69, 0.15); color: #155724; }
+.status-pending { background-color: rgba(255, 193, 7, 0.15); color: #856404; }
 
 /* Risk Score Indicators */
 .risk-score {
@@ -356,6 +359,26 @@ h6 { font-size: 1rem; }
 .risk-low {
     background-color: var(--success-green);
     color: var(--white);
+}
+
+.bg-critical {
+    background-color: var(--danger-red) !important;
+    color: var(--white) !important;
+}
+
+.bg-high {
+    background-color: var(--warning-orange) !important;
+    color: var(--text-dark) !important;
+}
+
+.bg-medium {
+    background-color: var(--info-blue) !important;
+    color: var(--white) !important;
+}
+
+.bg-low {
+    background-color: var(--success-green) !important;
+    color: var(--white) !important;
 }
 
 /* Buttons */

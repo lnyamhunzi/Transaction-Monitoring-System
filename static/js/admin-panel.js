@@ -109,10 +109,7 @@ class AMLAdminPanel {
         const element = document.getElementById(metricId);
         if (!element) return;
         
-        const valueElement = element.querySelector('.metric-value');
-        if (valueElement) {
-            valueElement.textContent = value + unit;
-        }
+        element.textContent = value + unit;
     }
     
     /**
